@@ -128,9 +128,12 @@ class OrchestratorService:
             qi = int(question_id[1:])
         except ValueError as exc:
             raise ValueError("Invalid question id") from exc
+
+        # If cursor from saved state is stale, fall back to the submitted question id.
         if qi != cursor:
-            raise ValueError("Answer does not match current question")
-        if qi >= len(questions):
+            cursor = qi
+
+        if cursor >= len(questions):
             raise ValueError("Invalid state")
         q = questions[qi]
         choices = q.get("choices") or []

@@ -1,4 +1,5 @@
 import json
+import random
 
 from app.core.config import get_settings
 from app.services.guardrails import (
@@ -38,29 +39,81 @@ class PlacementAgent(AgentPair):
         self.rag = rag
 
     def generate_and_validate(self, level: str, question_count: int) -> dict:
-        context = self.rag.retrieve_python_basics_context(f"python basics {level} concepts", k=5)
-        payload = self._generate_with_retries(
-            model=self.settings.smart_model,
-            system_prompt=(
-                "Placement generator for Python Basics. Return JSON with questions list; "
-                "each question has question, choices (exactly 4 options), correct_answer, concept. "
-                "Create questions based on the provided context from the resource."
-            ),
-            user_prompt=f"Context: {context}\nCreate {question_count} {level} diagnostic questions with 4 multiple choice options each.",
-        )
-        questions = payload.get("questions", [])
+        all_chunks = self.rag.retrieve_python_basics_context(f"python basics {level} concepts", k=20)
+        if not all_chunks:
+            raise AgentValidationError("No context chunks available for placement generation.")
+
+        selected_chunks = random.sample(all_chunks, min(question_count, len(all_chunks)))
+
+        questions: list[dict] = []
+        seen_question_texts = set()
+
+        for idx in range(question_count):
+            chunk = selected_chunks[idx % len(selected_chunks)]
+            chunk_text = str(chunk).strip()
+            for attempt in range(5):
+                payload = self._generate_with_retries(
+                    model=self.settings.smart_model,
+                    system_prompt=(
+                        "Placement generator for Python Basics. Return JSON with one question object; "
+                        "question (string), choices (array of 4 strings), correct_answer, concept. "
+                        "Include only the question object in JSON."
+                    ),
+                    user_prompt=(
+                        f"Context chunk: {chunk_text}\n"
+                        f"Question index: {idx + 1} of {question_count}\n"
+                        f"Generate one unique {level} diagnostic MCQ from this context. "
+                        "Make sure question text is not repeated within this set."
+                    ),
+                )
+
+                q = payload.get("question") if isinstance(payload.get("question"), dict) else payload
+                # Normalize for compatibility with expected bulk schema
+                if isinstance(q, dict) and "question" in q and "choices" in q:
+                    question_obj = q
+                else:
+                    question_obj = payload.get("questions", [{}])[0] if isinstance(payload.get("questions"), list) else None
+
+                if not question_obj or not isinstance(question_obj, dict):
+                    continue
+
+                text = str(question_obj.get("question", "")).strip()
+                if not text:
+                    continue
+                text_lower = text.lower()
+                if text_lower in seen_question_texts:
+                    continue
+
+                choices = question_obj.get("choices", [])
+                correct = question_obj.get("correct_answer")
+
+                if len(choices) != 4:
+                    continue
+                if correct not in choices:
+                    continue
+                if level.lower() == "beginner" and "asyncio" in text_lower:
+                    continue
+
+                seen_question_texts.add(text_lower)
+                questions.append(
+                    {
+                        "question": text,
+                        "choices": choices,
+                        "correct_answer": correct,
+                        "concept": question_obj.get("concept", "Python Basics"),
+                    }
+                )
+                break
+
+                raise AgentValidationError(
+                    "Placement generator failed to produce unique questions after retries."
+                )
+
         if len(questions) != question_count:
             raise AgentValidationError(f"Placement generator must produce exactly {question_count} questions.")
 
-        for q in questions:
-            choices = q.get("choices", [])
-            if len(choices) != 4:
-                raise AgentValidationError("Each question must have exactly 4 choices.")
-            if q.get("correct_answer") not in choices:
-                raise AgentValidationError("Question must include exactly one valid correct answer.")
-            if level.lower() == "beginner" and "asyncio" in q.get("question", "").lower():
-                raise AgentValidationError("Beginner placement includes advanced topic.")
-        return payload
+        return {"questions": questions}
+
 
 
 class SyllabusAgent(AgentPair):

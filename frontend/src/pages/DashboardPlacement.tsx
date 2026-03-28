@@ -312,7 +312,7 @@ export default function DashboardPlacement() {
                 {results.level}
               </div>
               <p className="text-center text-[color:var(--text-primary)] mb-6">
-                Score: <strong>{results.score}</strong> / 24 points ({results.percentage}%)
+                Score: <strong>{results.score}</strong> / {totalQuestions} points ({results.percentage}%)
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                 <div className="rounded-xl p-4 border border-emerald-500/30 bg-emerald-500/10">
