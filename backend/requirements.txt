@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+aiosqlite
+pydantic
+pydantic-settings
+python-jose[cryptography]
+passlib[bcrypt]
+groq
+langchain
+langchain-groq
+numpy

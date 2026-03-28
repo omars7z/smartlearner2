@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+/* Class-based dark mode */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Custom theme variables */
+@theme {
+  --color-navy: #0F172A;
+  --color-electric: #3B82F6;
+  --color-cyan: #06B6D4;
+  --font-sans-en: 'Inter', system-ui, sans-serif;
+  --font-sans-ar: 'Cairo', system-ui, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-family: var(--font-sans-en);
+}
+[dir="rtl"] body {
+  font-family: var(--font-sans-ar);
+}
+
+/* Glassmorphism utility */
+.glass {
+  @apply backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10;
+}
+
+.glass-card {
+  @apply backdrop-blur-xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/50 dark:border-white/10;
+}
+
+/* Global design tokens for dashboard */
+:root {
+  /* Light mode tokens */
+  --bg-primary: #F0F4FF;
+  --bg-secondary: #E8EFFE;
+  --bg-card: #FFFFFF;
+  --bg-input: #F1F5FF;
+  --border-color: #C7D7F5;
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+  --shadow-elevated: 0 4px 24px rgba(59, 130, 246, 0.10);
+
+  /* Accent colors (overridden by JS via CSS vars) */
+  --accent-primary: #3B82F6;
+  --accent-secondary: #06B6D4;
+}
+
+.dark {
+  /* Dark mode tokens */
+  --bg-primary: #020617;
+  --bg-secondary: #020617;
+  --bg-card: rgba(15, 23, 42, 0.96);
+  --bg-input: #020617;
+  --border-color: rgba(148, 163, 184, 0.35);
+  --text-primary: #E5E7EB;
+  --text-secondary: #CBD5F5;
+  --text-muted: #64748B;
+  --shadow-elevated: 0 18px 45px rgba(15, 23, 42, 0.9);
+}
+
+/* Premium dashboard background */
+.bg-dot-grid {
+  background-color: var(--bg-primary);
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    rgba(199, 215, 245, 0.45) 1px,
+    transparent 0
+  );
+  background-size: 24px 24px;
+}
+
+/* Blinking cursor for terminal-style boxes */
+.cursor-blink::after {
+  content: '▍';
+  display: inline-block;
+  margin-left: 4px;
+  animation: cursor-blink 1s steps(2, start) infinite;
+}
+
+@keyframes cursor-blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  50.01%, 100% {
+    opacity: 0;
+  }
+}
+
+/* Subtle pulse for primary CTA */
+.pulse-glow {
+  position: relative;
+}
+
+.pulse-glow::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.35), transparent 60%);
+  opacity: 0;
+  z-index: -1;
+  animation: pulse-glow 2.4s ease-out infinite;
+}
+
+@keyframes pulse-glow {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.6;
+  }
+  60% {
+    transform: scale(1.05);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.05);
+    opacity: 0;
+  }
+}
+

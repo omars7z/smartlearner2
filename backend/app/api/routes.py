@@ -1,0 +1,123 @@
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.security import create_access_token, get_current_user_id, get_password_hash, verify_password
+from app.db.session import get_db
+from app.repositories.course_repository import CourseRepository
+from app.repositories.user_repository import UserRepository
+from app.schemas.contracts import (
+    ChatRequest,
+    ExamExecutionRequest,
+    LessonGenerationRequest,
+    LoginRequest,
+    PlacementGenerationRequest,
+    PlacementSubmissionRequest,
+    RegisterRequest,
+    SyllabusRequest,
+    TokenResponse,
+)
+from app.services.orchestrator_service import OrchestratorService
+
+router = APIRouter(prefix="/api/v1")
+
+
+@router.post("/auth/register", response_model=TokenResponse)
+async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    users = UserRepository(db)
+    existing = await users.get_by_email(payload.email)
+    if existing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already exists")
+    user = await users.create(payload.email, get_password_hash(payload.password))
+    token = create_access_token(str(user.id))
+    return TokenResponse(access_token=token)
+
+
+@router.post("/auth/token", response_model=TokenResponse)
+async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    users = UserRepository(db)
+    user = await users.get_by_email(payload.email)
+    if user is None or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    token = create_access_token(str(user.id))
+    return TokenResponse(access_token=token)
+
+
+@router.post("/placement/generate")
+async def generate_placement(
+    payload: PlacementGenerationRequest,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    service = OrchestratorService(db)
+    return await service.create_placement_test(user_id, payload.level, payload.question_count)
+
+
+@router.post("/placement/submit")
+async def submit_placement(
+    payload: PlacementSubmissionRequest,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    repo = CourseRepository(db)
+    placement = await repo.update_placement_score(payload.placement_id, payload.score)
+    if placement is None or placement.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Placement test not found")
+    return {"placement_id": placement.id, "score": placement.score}
+
+
+@router.post("/syllabus/generate")
+async def generate_syllabus(
+    payload: SyllabusRequest,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    service = OrchestratorService(db)
+    try:
+        return await service.build_syllabus(user_id, payload.placement_id, payload.course_title)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/lessons/generate")
+async def generate_lesson(
+    payload: LessonGenerationRequest,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    service = OrchestratorService(db)
+    try:
+        return await service.generate_lesson_content(user_id, payload.lesson_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/chat/ask")
+@router.post("/qa/ask")  # alias for frontend (api.ts)
+async def ask_chatbot(
+    payload: ChatRequest,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    service = OrchestratorService(db)
+    try:
+        return await service.answer_question(
+            user_id,
+            payload.question,
+            lesson_id=payload.lesson_id,
+            current_topic=payload.current_topic,
+            student_context=payload.student_context,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/exam/run")
+async def run_exam(
+    payload: ExamExecutionRequest,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    service = OrchestratorService(db)
+    return await service.run_exam_code(payload.code)

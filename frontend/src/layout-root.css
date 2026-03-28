@@ -1,0 +1,16 @@
+/*
+ * Root layout: allow the landing page to scroll normally.
+ * Dashboard uses DashboardLayout (100vh + internal scroll) — no global clip needed.
+ */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+/* Avoid wide horizontal scroll; vertical scroll stays enabled */
+html {
+  overflow-x: hidden;
+}
