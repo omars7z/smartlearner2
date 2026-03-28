@@ -26,6 +26,19 @@ class PlacementSubmissionRequest(BaseModel):
     score: int = Field(ge=0, le=100)
 
 
+class PlacementStartRequest(BaseModel):
+    """Dashboard placement flow: one question at a time."""
+
+    track: str = "python"
+
+
+class PlacementAnswerRequest(BaseModel):
+    placement_id: int
+    track: str = "python"
+    question_id: str
+    answer_index: int = Field(ge=0)
+
+
 class SyllabusRequest(BaseModel):
     placement_id: int
     course_title: str = "Python Foundations"

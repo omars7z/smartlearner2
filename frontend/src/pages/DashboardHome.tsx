@@ -40,6 +40,7 @@ export default function DashboardHome() {
   } = useDashboard()
 
   const [track, setTrack] = useState<string>('python')
+  const [placementId, setPlacementId] = useState<number | null>(null)
   const [currentQuestion, setCurrentQuestion] = useState<PlacementQuestionDto | null>(null)
   const [selectedOption, setSelectedOption] = useState<number | null>(null)
   const [placementError, setPlacementError] = useState<string | null>(null)
@@ -52,6 +53,7 @@ export default function DashboardHome() {
     setPlacementError(null)
     try {
       const data = await placementApi.start(track)
+      setPlacementId(typeof data.placement_id === 'number' ? data.placement_id : null)
       if (!data.next_question) {
         setPlacementError('Placement agent did not return a question.')
       } else {
@@ -68,11 +70,11 @@ export default function DashboardHome() {
   }
 
   const submitPlacement = async () => {
-    if (!currentQuestion || selectedOption === null) return
+    if (!currentQuestion || selectedOption === null || placementId === null) return
     setPlacementLoading(true)
     setPlacementError(null)
     try {
-      const data = await placementApi.answer(track, currentQuestion.id, selectedOption)
+      const data = await placementApi.answer(placementId, track, currentQuestion.id, selectedOption)
       if (data.finished && data.placement_result) {
         const full = data.placement_result as PlacementFullResult
         setPlacementDone(

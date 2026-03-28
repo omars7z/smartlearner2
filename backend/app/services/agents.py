@@ -33,23 +33,30 @@ class AgentPair:
 
 
 class PlacementAgent(AgentPair):
+    def __init__(self, name: str, llm: LLMClient, rag: RAGService):
+        super().__init__(name, llm)
+        self.rag = rag
+
     def generate_and_validate(self, level: str, question_count: int) -> dict:
+        context = self.rag.retrieve_python_basics_context(f"python basics {level} concepts", k=5)
         payload = self._generate_with_retries(
             model=self.settings.smart_model,
             system_prompt=(
                 "Placement generator for Python Basics. Return JSON with questions list; "
-                "each question has question, choices, correct_answer, concept."
+                "each question has question, choices (exactly 4 options), correct_answer, concept. "
+                "Create questions based on the provided context from the resource."
             ),
-            user_prompt=f"Create {question_count} beginner diagnostic questions for level={level}.",
+            user_prompt=f"Context: {context}\nCreate {question_count} {level} diagnostic questions with 4 multiple choice options each.",
         )
         questions = payload.get("questions", [])
-        if not (5 <= len(questions) <= 10):
-            raise AgentValidationError("Placement generator must produce 5-10 questions.")
+        if len(questions) != question_count:
+            raise AgentValidationError(f"Placement generator must produce exactly {question_count} questions.")
 
         for q in questions:
-            if len(q.get("choices", [])) < 2:
-                raise AgentValidationError("Each question must have multiple choices.")
-            if q.get("correct_answer") not in q.get("choices", []):
+            choices = q.get("choices", [])
+            if len(choices) != 4:
+                raise AgentValidationError("Each question must have exactly 4 choices.")
+            if q.get("correct_answer") not in choices:
                 raise AgentValidationError("Question must include exactly one valid correct answer.")
             if level.lower() == "beginner" and "asyncio" in q.get("question", "").lower():
                 raise AgentValidationError("Beginner placement includes advanced topic.")

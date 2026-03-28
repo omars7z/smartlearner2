@@ -61,12 +61,18 @@ export default function DashboardPlacement() {
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null)
   const [results, setResults] = useState<PlacementFullResult | null>(null)
   const [trackId, setTrackId] = useState<string>('python')
+  const [placementId, setPlacementId] = useState<number | null>(null)
 
   const startTest = async () => {
     setState('loading')
     setBusy(true)
     try {
       const res = await placementApi.start(trackId)
+      if (typeof res.placement_id === 'number') {
+        setPlacementId(res.placement_id)
+      } else {
+        setPlacementId(null)
+      }
       const rawAny = (res as any)?.next_question ?? (res as any)?.question ?? res
       const q = normalizeQuestion(rawAny as Record<string, unknown>)
       if (!q || !q.question_text) {
@@ -89,12 +95,17 @@ export default function DashboardPlacement() {
   }
 
   const submitAnswer = async () => {
-    if (!currentQuestion || selectedAnswer == null) return
+    if (!currentQuestion || selectedAnswer == null || placementId == null) return
     setState('loading')
     setBusy(true)
     try {
       const answerIndex = currentQuestion.options.findIndex((o) => o.id === selectedAnswer)
-      const res = await placementApi.answer(trackId, currentQuestion.question_id, answerIndex >= 0 ? answerIndex : 0)
+      const res = await placementApi.answer(
+        placementId,
+        trackId,
+        currentQuestion.question_id,
+        answerIndex >= 0 ? answerIndex : 0
+      )
       const data = res as {
         finished?: boolean
         completed?: boolean

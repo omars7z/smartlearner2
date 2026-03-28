@@ -135,6 +135,7 @@ export interface PlacementQuestionDto {
 
 export interface StartPlacementResponse {
   status: string
+  placement_id: number
   next_question: PlacementQuestionDto | null
 }
 
@@ -161,8 +162,9 @@ export const placementApi = {
     const res = await api.post<StartPlacementResponse>('/placement/start', { track })
     return res.data
   },
-  async answer(track: string, questionId: string, answerIndex: number) {
+  async answer(placementId: number, track: string, questionId: string, answerIndex: number) {
     const res = await api.post<AnswerPlacementResponse>('/placement/answer', {
+      placement_id: placementId,
       track,
       question_id: questionId,
       answer_index: answerIndex,

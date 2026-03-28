@@ -12,12 +12,15 @@ from app.schemas.contracts import (
     ExamExecutionRequest,
     LessonGenerationRequest,
     LoginRequest,
+    PlacementAnswerRequest,
     PlacementGenerationRequest,
+    PlacementStartRequest,
     PlacementSubmissionRequest,
     RegisterRequest,
     SyllabusRequest,
     TokenResponse,
 )
+from app.services.agents import AgentValidationError
 from app.services.orchestrator_service import OrchestratorService
 
 router = APIRouter(prefix="/api/v1")
@@ -42,6 +45,38 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     token = create_access_token(str(user.id))
     return TokenResponse(access_token=token)
+
+
+@router.post("/placement/start")
+async def placement_start(
+    payload: PlacementStartRequest,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    service = OrchestratorService(db)
+    try:
+        return await service.start_placement_session(user_id, payload.track)
+    except AgentValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.post("/placement/answer")
+async def placement_answer(
+    payload: PlacementAnswerRequest,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    service = OrchestratorService(db)
+    try:
+        return await service.answer_placement_step(
+            user_id,
+            payload.placement_id,
+            payload.track,
+            payload.question_id,
+            payload.answer_index,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @router.post("/placement/generate")

@@ -3,23 +3,34 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+import hashlib
+
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.repositories.user_repository import UserRepository
 
-pwd_context = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
 
 
+def _password_preimage(password: str) -> bytes:
+    """SHA-256 preimage, then bcrypt (same idea as passlib bcrypt_sha256; works with bcrypt 4.1+)."""
+    return hashlib.sha256(password.encode("utf-8")).digest()
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    if not hashed_password:
+        return False
+    try:
+        return bcrypt.checkpw(_password_preimage(plain_password), hashed_password.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(_password_preimage(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def create_access_token(subject: str) -> str:
