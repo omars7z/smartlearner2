@@ -56,7 +56,11 @@ export default function Register() {
       localStorage.setItem('smartlearner_token', res.access_token)
       localStorage.setItem(
         'smartlearner-current-user',
-        JSON.stringify({ fullName: res.full_name, email: res.email, role: res.role })
+        JSON.stringify({
+          fullName: res.full_name ?? form.fullName,
+          email: res.email ?? form.email,
+          role: res.role ?? role,
+        })
       )
       setShowToast(true)
       setTimeout(() => {

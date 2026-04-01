@@ -26,6 +26,15 @@ from app.services.orchestrator_service import OrchestratorService
 router = APIRouter(prefix="/api/v1")
 
 
+async def _login_issue_token(payload: LoginRequest, db: AsyncSession) -> TokenResponse:
+    users = UserRepository(db)
+    user = await users.get_by_email(payload.email)
+    if user is None or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    token = create_access_token(str(user.id))
+    return TokenResponse(access_token=token)
+
+
 @router.post("/auth/register", response_model=TokenResponse)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
     users = UserRepository(db)
@@ -39,12 +48,13 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
 
 @router.post("/auth/token", response_model=TokenResponse)
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
-    users = UserRepository(db)
-    user = await users.get_by_email(payload.email)
-    if user is None or not verify_password(payload.password, user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    token = create_access_token(str(user.id))
-    return TokenResponse(access_token=token)
+    return await _login_issue_token(payload, db)
+
+
+@router.post("/auth/login", response_model=TokenResponse)
+async def login_alias(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    """Same as /auth/token — kept for clients that expect /auth/login."""
+    return await _login_issue_token(payload, db)
 
 
 @router.post("/placement/start")

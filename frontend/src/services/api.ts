@@ -31,12 +31,13 @@ api.interceptors.response.use(
 
 export type UserRole = 'student' | 'admin'
 
+/** Backend returns TokenResponse; profile fields are optional until /me exists. */
 export interface AuthResponse {
   access_token: string
-  token_type: string
-  full_name: string
-  email: string
-  role: UserRole
+  token_type?: string
+  full_name?: string
+  email?: string
+  role?: UserRole
 }
 
 export const authApi = {
@@ -50,7 +51,7 @@ export const authApi = {
     return res.data
   },
   async login(payload: { email: string; password: string }) {
-    const res = await api.post<AuthResponse>('/auth/login', payload)
+    const res = await api.post<AuthResponse>('/auth/token', payload)
     return res.data
   },
 }

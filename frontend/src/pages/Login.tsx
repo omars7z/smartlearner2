@@ -22,7 +22,11 @@ export default function Login() {
       localStorage.setItem('smartlearner_token', res.access_token)
       localStorage.setItem(
         'smartlearner-current-user',
-        JSON.stringify({ fullName: res.full_name, email: res.email, role: res.role })
+        JSON.stringify({
+          fullName: res.full_name ?? email.split('@')[0] ?? 'User',
+          email: res.email ?? email,
+          role: res.role ?? 'student',
+        })
       )
       navigate('/dashboard')
     } catch (err: any) {
