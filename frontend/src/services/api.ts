@@ -208,10 +208,10 @@ export interface SyllabusGenerateEnvelope {
 }
 
 export const syllabusApi = {
-  async generate(track: string, placementResult: PlacementFullResult) {
+  async generate(placementId: number, courseTitle?: string) {
     const res = await api.post<SyllabusGenerateEnvelope>('/syllabus/generate', {
-      track,
-      placement_result: placementResult,
+      placement_id: placementId,
+      course_title: courseTitle,
     })
     return res.data
   },

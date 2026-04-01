@@ -84,7 +84,8 @@ export default function DashboardHome() {
             track: full.track,
             percentage: full.percentage,
           },
-          full
+          full,
+          placementId
         )
         setCurrentQuestion(null)
         setSelectedOption(null)
@@ -103,13 +104,13 @@ export default function DashboardHome() {
   }
 
   const handleGenerateSyllabus = async () => {
-    if (!fullPlacementResult) {
+    if (!fullPlacementResult || !placementId) {
       addToast('error', 'Complete the placement test first.')
       return
     }
     setSyllabusLoading(true)
     try {
-      const data = await syllabusApi.generate(track, fullPlacementResult)
+      const data = await syllabusApi.generate(placementId, `Python ${fullPlacementResult.level} Course`)
       const modules = data.result?.syllabus ?? []
       if (modules.length) {
         setSyllabusModules(modules)

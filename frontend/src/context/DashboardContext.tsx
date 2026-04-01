@@ -32,6 +32,7 @@ export interface DashboardState {
   placementDone: boolean
   placementResult: DashboardPlacementResult | null
   fullPlacementResult: PlacementFullResult | null
+  placementId: number | null
   syllabusGenerated: boolean
   syllabusModules: ModuleDto[]
   currentLesson: LessonDto | null
@@ -49,6 +50,7 @@ const defaultState: DashboardState = {
   placementDone: false,
   placementResult: null,
   fullPlacementResult: null,
+  placementId: null,
   syllabusGenerated: false,
   syllabusModules: [],
   currentLesson: null,
@@ -91,7 +93,7 @@ function saveState(state: DashboardState) {
 }
 
 interface DashboardContextValue extends DashboardState {
-  setPlacementDone: (result: DashboardPlacementResult | null, full?: PlacementFullResult | null) => void
+  setPlacementDone: (result: DashboardPlacementResult | null, full?: PlacementFullResult | null, placementId?: number | null) => void
   setSyllabusModules: (modules: ModuleDto[]) => void
   setCurrentLesson: (lesson: LessonDto | null) => void
   setOverallMastery: (value: number) => void
@@ -113,13 +115,14 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   }, [state])
 
     const setPlacementDone = useCallback(
-    (result: DashboardPlacementResult | null, full?: PlacementFullResult | null) => {
+    (result: DashboardPlacementResult | null, full?: PlacementFullResult | null, placementId?: number | null) => {
       setState((s) => {
         const next = {
           ...s,
           placementDone: result != null,
           placementResult: result ?? null,
           fullPlacementResult: full ?? s.fullPlacementResult ?? null,
+          placementId: placementId ?? s.placementId,
           syllabusGenerated: result == null ? s.syllabusGenerated : false,
           syllabusModules: result == null ? s.syllabusModules : [],
           currentLesson: result == null ? s.currentLesson : null,

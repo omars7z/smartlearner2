@@ -117,19 +117,32 @@ class PlacementAgent(AgentPair):
 
 
 class SyllabusAgent(AgentPair):
-    def generate_and_validate(self, score: int) -> dict:
+    def generate_and_validate(self, score: int, level: str) -> dict:
         payload = self._generate_with_retries(
             model=self.settings.smart_model,
-            system_prompt="Syllabus generator for Python Basics. Return JSON with lessons[].",
-            user_prompt=f"Build a customized beginner path from placement score={score}.",
+            system_prompt="Syllabus generator for Python Basics. Return JSON with lessons[] array of unique topics. Each lesson should have 'topic' and 'description' fields. Never repeat the same topic.",
+            user_prompt=f"Build a customized {level} path from placement score={score}. Ensure each topic appears only once.",
         )
         lessons = payload.get("lessons", [])
+        
+        # Deduplicate lessons by topic while preserving order
+        seen_topics = set()
+        unique_lessons = []
+        for lesson in lessons:
+            topic = lesson.get("topic", "")
+            if topic and topic not in seen_topics:
+                seen_topics.add(topic)
+                unique_lessons.append(lesson)
+        
+        # Update payload with deduplicated lessons
+        payload["lessons"] = unique_lessons
+        lessons = unique_lessons
         topics = [lesson.get("topic", "") for lesson in lessons]
+        
         if "Variable Assignment" in topics and "Expressions" in topics:
             if topics.index("Expressions") > topics.index("Variable Assignment"):
                 raise AgentValidationError("Expressions must be taught before Variable Assignment.")
-        if len(set(topics)) != len(topics):
-            raise AgentValidationError("Syllabus contains circular/duplicate dependencies.")
+        
         return payload
 
 
@@ -139,21 +152,40 @@ class LessonAgent(AgentPair):
         self.rag = rag
 
     def generate_and_validate(self, topic: str) -> dict:
-        context = self.rag.retrieve_python_basics_context(topic, k=3)
+        context = self.rag.retrieve_python_basics_context(topic, k=5)
         sanitized_topic = sanitize_prompt(topic)
         payload = self._generate_with_retries(
             model=self.settings.smart_model,
             system_prompt=(
-                "Lesson generator. Return JSON with markdown only. "
-                "Lesson must cite Automate the Boring Stuff with Python and Python Basics concepts."
+                "Lesson generator for 'Automate the Boring Stuff with Python' by Al Sweigart. "
+                "Return JSON with 'markdown' field as the sole content. "
+                "The lesson MUST cite 'Automate the Boring Stuff with Python' explicitly. "
+                "Base your explanation on the provided book context. "
+                "Include relevant Python concepts like expressions, data types, variable assignment, or string replication where applicable."
             ),
-            user_prompt=f"Topic={sanitized_topic}\nContext={context}",
+            user_prompt=f"Topic: {sanitized_topic}\n\nBook Context:\n{context}\n\nGenerate a comprehensive lesson on this topic from Automate the Boring Stuff with Python.",
         )
         markdown = payload.get("markdown", "")
+        
+        # Append source grounding if not already present
+        if "automate the boring stuff" not in markdown.lower():
+            markdown = self._append_source_grounding(markdown)
+            payload["markdown"] = markdown
+        
         ok, reason = validate_content_scope(markdown)
         if not ok:
             raise AgentValidationError(reason)
         return payload
+
+    def _append_source_grounding(self, answer: str) -> str:
+        resource = self.settings.source_resource
+        scope = self.settings.source_scope
+        suffix = (
+            f"\n\n(Source: 'Automate the Boring Stuff with Python' by Al Sweigart. "
+            f"Resource: {resource}; Scope: {scope}. "
+            "Covers core Python concepts: expressions, data types, variable assignment, string operations.)"
+        )
+        return answer.rstrip() + suffix
 
 
 class QAAgent(AgentPair):

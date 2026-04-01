@@ -121,7 +121,8 @@ export default function DashboardPlacement() {
         if (placementResult) {
           setPlacementDone(
             { level: placementResult.level, score: placementResult.score, track: placementResult.track, percentage: placementResult.percentage },
-            placementResult
+            placementResult,
+            placementId
           )
           try {
             localStorage.setItem('placement_result', JSON.stringify(placementResult))

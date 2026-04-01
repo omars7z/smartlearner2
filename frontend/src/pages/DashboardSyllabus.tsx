@@ -21,7 +21,7 @@ function normalizeSyllabus(data: unknown): { track: string; total_modules: numbe
 
 export default function DashboardSyllabus() {
   const { accentPrimary, accentSecondary } = useAccentTheme()
-  const { syllabusModules, setSyllabusModules, fullPlacementResult } = useDashboard()
+  const { syllabusModules, setSyllabusModules, fullPlacementResult, placementId } = useDashboard()
   const { addToast } = useToast()
   const navigate = useNavigate()
   const location = useLocation()
@@ -49,7 +49,7 @@ export default function DashboardSyllabus() {
         return null
       }
     })()
-    if (!placement) {
+    if (!placement || !placementId) {
       addToast('error', 'Complete the placement test first.')
       navigate('/dashboard/placement')
       return
@@ -57,8 +57,8 @@ export default function DashboardSyllabus() {
     setLoading(true)
     setLastError(null)
     try {
-      const track = localStorage.getItem('current_track') ?? placement.track ?? 'python'
-      const data = await syllabusApi.generate(track, placement)
+      const courseTitle = `Python ${placement.level} Course`
+      const data = await syllabusApi.generate(placementId, courseTitle)
       const envelope = data as { result?: { syllabus?: ModuleDto[]; modules?: ModuleDto[]; track?: string }; syllabus?: ModuleDto[]; modules?: ModuleDto[] }
       const resolved = envelope.result ?? envelope
       if ((resolved as any)?.status === 'error' && (resolved as any)?.error) {

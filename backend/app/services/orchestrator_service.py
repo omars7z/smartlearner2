@@ -195,22 +195,82 @@ class OrchestratorService:
         if placement is None or placement.user_id != user_id:
             raise ValueError("Placement test not found")
         score = placement.score or 0
-        generated = self.syllabus_agent.generate_and_validate(score=score)
+        level_str = _score_to_level(score)
+        generated = self.syllabus_agent.generate_and_validate(score=score, level=level_str)
+        
+        # Transform lessons from SyllabusAgent format to CourseRepository format
+        # SyllabusAgent returns: {"topic": str, "description": str}
+        # CourseRepository expects: {"title": str, "topic": str, "prerequisites": [], "markdown_content": str}
+        transformed_lessons = []
+        for idx, lesson in enumerate(generated.get("lessons", []), start=1):
+            transformed_lessons.append({
+                "title": lesson.get("topic", ""),
+                "topic": lesson.get("topic", "").lower().replace(" ", "_"),
+                "prerequisites": lesson.get("prerequisites", []),
+                "markdown_content": lesson.get("description", ""),
+            })
+        
         course = await self.course_repo.create_course_with_lessons(
             user_id=user_id,
             title=course_title,
-            level="Beginner",
-            lessons=generated["lessons"],
+            level=level_str.capitalize(),
+            lessons=transformed_lessons,
         )
+        
+        # Refresh the course with lessons loaded
+        course = await self.course_repo.get_course_with_lessons(course.id)
+        if course is None:
+            raise ValueError("Failed to retrieve created course with lessons")
+        
         await self.agent_repo.log_run(
             agent_name="syllabus",
             stage="generator-validator",
-            input_json={"placement_id": placement_id, "score": score},
+            input_json={"placement_id": placement_id, "score": score, "level": level_str},
             output_json=generated,
             is_valid=True,
             user_id=user_id,
         )
-        return {"course_id": course.id, "lessons": generated["lessons"]}
+        
+        # Transform to frontend ModuleDto format with embedded lessons
+        # Each lesson becomes a module with one lesson inside
+        modules = []
+        for idx, lesson in enumerate(course.lessons, start=1):
+            modules.append({
+                "id": f"module_{idx}",
+                "module_id": f"module_{idx}",
+                "title": lesson.topic.replace("_", " ").title(),
+                "description": f"Learn about {lesson.topic.replace('_', ' ').lower()}",
+                "topics": [lesson.topic],
+                "duration": "20 min",
+                "target_level": level_str,
+                "lessons": [
+                    {
+                        "lesson_id": f"lesson_{lesson.id}",
+                        "id": f"lesson_{lesson.id}",
+                        "title": lesson.title,
+                        "topic": lesson.topic,
+                        "topic_name": lesson.topic,
+                        "duration_minutes": 20,
+                        "order": lesson.order_index,
+                    }
+                ]
+            })
+        
+        return {
+            "status": "success",
+            "intent": "syllabus_generation",
+            "result": {
+                "status": "generated",
+                "track": "python",
+                "level": level_str,
+                "syllabus": modules,
+                "validation": {
+                    "status": "valid",
+                    "is_valid": True,
+                    "issues": []
+                }
+            }
+        }
 
     async def generate_lesson_content(self, user_id: int, lesson_id: int) -> dict:
         from app.models.entities import Lesson
@@ -228,7 +288,25 @@ class OrchestratorService:
             is_valid=True,
             user_id=user_id,
         )
-        return {"lesson_id": updated.id, "markdown": updated.markdown_content}
+        
+        # Format response matching frontend StructuredLesson interface
+        return {
+            "status": "success",
+            "lesson": {
+                "lesson_id": f"lesson_{updated.id}",
+                "title": updated.title,
+                "duration_minutes": 20,
+                "sections": [
+                    {
+                        "type": "explanation",
+                        "title": updated.title,
+                        "content": updated.markdown_content or "",
+                    }
+                ]
+            },
+            "generated_in_ms": 0,
+            "llm_used": True,
+        }
 
     async def answer_question(
         self,

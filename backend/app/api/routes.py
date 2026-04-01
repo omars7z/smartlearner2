@@ -128,6 +128,32 @@ async def generate_lesson(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.get("/lessons/{lesson_id}")
+async def get_lesson(
+    lesson_id: str,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Fetch lesson content. lesson_id can be a direct integer or in format 'lesson_N'."""
+    service = OrchestratorService(db)
+    try:
+        # Parse lesson_id: if it's "lesson_19", extract 19
+        actual_id = lesson_id
+        if lesson_id.startswith("lesson_"):
+            actual_id = int(lesson_id.replace("lesson_", ""))
+        else:
+            actual_id = int(lesson_id)
+        return await service.generate_lesson_content(user_id, actual_id)
+    except ValueError as exc:
+        if "Invalid literal" in str(exc) or "invalid literal" in str(exc):
+            raise HTTPException(status_code=400, detail=f"Invalid lesson_id format: {lesson_id}")
+        raise HTTPException(status_code=404, detail=str(exc))
+    except TypeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid lesson_id format: {lesson_id}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error generating lesson content: {str(exc)}")
+
+
 @router.post("/chat/ask")
 @router.post("/qa/ask")  # alias for frontend (api.ts)
 async def ask_chatbot(
