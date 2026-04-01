@@ -8,6 +8,7 @@ import {
   BookOpen,
   PlayCircle,
   MessageCircle,
+  FolderOpen,
   Award,
   BarChart2,
   Settings,
@@ -37,6 +38,7 @@ const NAV_ITEMS = [
   { to: '/dashboard/lessons', end: false, label: 'Lessons', icon: PlayCircle },
   { to: '/dashboard/qa', end: false, label: 'Q&A Assistant', icon: MessageCircle },
   { to: '/dashboard/exams', end: false, label: 'Exams', icon: Award },
+  { to: '/dashboard/resources', end: false, label: 'Resources', icon: FolderOpen },
   { to: '/dashboard/analytics', end: false, label: 'Analytics', icon: BarChart2 },
   { to: '/dashboard/settings', end: false, label: 'Settings', icon: Settings },
 ]
@@ -64,11 +66,13 @@ export default function DashboardLayout() {
     return false
   }
 
-  let user: { fullName?: string } = { fullName: 'Student' }
+  let user: { fullName?: string; email?: string; role?: 'student' | 'admin' } = { fullName: 'Student' }
   try {
     const raw = localStorage.getItem('smartlearner-current-user')
     if (raw) user = JSON.parse(raw)
   } catch (_) {}
+  const isAdmin = user?.role === 'admin'
+  const visibleNavItems = NAV_ITEMS.filter((i) => (i.to === '/dashboard/resources' ? isAdmin : true))
 
   const handleLogout = () => {
     localStorage.removeItem('smartlearner-current-user')
@@ -141,7 +145,7 @@ export default function DashboardLayout() {
               className="space-y-1 text-sm"
               style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingBottom: 8 }}
             >
-              {NAV_ITEMS.map((item) => {
+              {visibleNavItems.map((item) => {
                 const Icon = item.icon
                 return (
                   <NavLink

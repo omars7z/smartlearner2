@@ -3,9 +3,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token, get_current_user_id, get_password_hash, verify_password
+from app.core.security import create_access_token, get_current_user, get_current_user_id, get_password_hash, verify_password
 from app.db.session import get_db
 from app.repositories.course_repository import CourseRepository
+from app.repositories.resource_repository import ResourceRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.contracts import (
     ChatRequest,
@@ -17,6 +18,8 @@ from app.schemas.contracts import (
     PlacementStartRequest,
     PlacementSubmissionRequest,
     RegisterRequest,
+    ResourceCreateRequest,
+    ResourceDto,
     SyllabusRequest,
     TokenResponse,
 )
@@ -32,7 +35,15 @@ async def _login_issue_token(payload: LoginRequest, db: AsyncSession) -> TokenRe
     if user is None or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     token = create_access_token(str(user.id))
-    return TokenResponse(access_token=token)
+    role = getattr(user, "role", "student") or "student"
+    if role not in ("student", "admin"):
+        role = "student"
+    return TokenResponse(
+        access_token=token,
+        full_name=user.full_name or "",
+        email=user.email,
+        role=role,  # type: ignore[arg-type]
+    )
 
 
 @router.post("/auth/register", response_model=TokenResponse)
@@ -41,9 +52,19 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     existing = await users.get_by_email(payload.email)
     if existing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already exists")
-    user = await users.create(payload.email, get_password_hash(payload.password))
+    user = await users.create(
+        email=payload.email,
+        hashed_password=get_password_hash(payload.password),
+        full_name=payload.full_name.strip(),
+        role=payload.role,
+    )
     token = create_access_token(str(user.id))
-    return TokenResponse(access_token=token)
+    return TokenResponse(
+        access_token=token,
+        full_name=user.full_name or payload.full_name,
+        email=user.email,
+        role=user.role,  # type: ignore[arg-type]
+    )
 
 
 @router.post("/auth/token", response_model=TokenResponse)
@@ -192,3 +213,48 @@ async def run_exam(
 ) -> dict:
     service = OrchestratorService(db)
     return await service.run_exam_code(payload.code)
+
+
+@router.get("/resources", response_model=list[ResourceDto])
+async def list_resources(
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ResourceDto]:
+    if getattr(user, "role", "student") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    repo = ResourceRepository(db)
+    items = await repo.list_resources()
+    return [
+        ResourceDto(
+            id=r.id,
+            title=r.title,
+            url=r.url,
+            description=r.description,
+            created_by_user_id=r.created_by_user_id,
+        )
+        for r in items
+    ]
+
+
+@router.post("/resources", response_model=ResourceDto)
+async def create_resource(
+    payload: ResourceCreateRequest,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ResourceDto:
+    if getattr(user, "role", "student") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    repo = ResourceRepository(db)
+    r = await repo.create_resource(
+        title=payload.title.strip(),
+        url=payload.url.strip(),
+        description=(payload.description.strip() if payload.description else None),
+        created_by_user_id=user.id,
+    )
+    return ResourceDto(
+        id=r.id,
+        title=r.title,
+        url=r.url,
+        description=r.description,
+        created_by_user_id=r.created_by_user_id,
+    )

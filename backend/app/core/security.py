@@ -63,3 +63,27 @@ async def get_current_user_id(
     if user is None:
         raise credentials_exception
     return user.id
+
+
+async def get_current_user(
+    token: Annotated[str, Depends(oauth2_scheme)],
+    db=Depends(get_db),
+):
+    settings = get_settings()
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+    )
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        subject = payload.get("sub")
+        if subject is None:
+            raise credentials_exception
+        user_id = int(subject)
+    except (JWTError, ValueError):
+        raise credentials_exception
+    repo = UserRepository(db)
+    user = await repo.get_by_id(user_id)
+    if user is None:
+        raise credentials_exception
+    return user

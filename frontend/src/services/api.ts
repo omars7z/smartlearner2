@@ -376,4 +376,25 @@ export const quickAssessmentApi = {
   },
 }
 
+// Resources
+export interface ResourceDto {
+  id: number
+  title: string
+  url: string
+  description?: string | null
+  created_at?: string
+  created_by_user_id?: number
+}
+
+export const resourcesApi = {
+  async list() {
+    const res = await api.get<ResourceDto[]>('/resources')
+    return res.data
+  },
+  async create(payload: { title: string; url: string; description?: string }) {
+    const res = await api.post<ResourceDto>('/resources', payload)
+    return res.data
+  },
+}
+
 

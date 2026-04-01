@@ -13,7 +13,19 @@ import DashboardExams from './pages/DashboardExams'
 import DashboardAnalytics from './pages/DashboardAnalytics'
 import DashboardQA from './pages/DashboardQA'
 import DashboardSettings from './pages/DashboardSettings'
+import DashboardResources from './pages/DashboardResources'
 import { ToastContainer } from './components/ToastContainer'
+
+function isAdminUser(): boolean {
+  try {
+    const raw = localStorage.getItem('smartlearner-current-user')
+    if (!raw) return false
+    const u = JSON.parse(raw)
+    return u?.role === 'admin'
+  } catch (_) {
+    return false
+  }
+}
 
 function App() {
   return (
@@ -36,6 +48,10 @@ function App() {
             <Route path="syllabus" element={<DashboardSyllabus />} />
             <Route path="lessons" element={<DashboardLessons />} />
             <Route path="exams" element={<DashboardExams />} />
+            <Route
+              path="resources"
+              element={isAdminUser() ? <DashboardResources /> : <Navigate to="/dashboard" replace />}
+            />
             <Route path="analytics" element={<DashboardAnalytics />} />
             <Route path="qa" element={<DashboardQA />} />
             <Route path="settings" element={<DashboardSettings />} />
