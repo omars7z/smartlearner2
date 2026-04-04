@@ -22,6 +22,7 @@ import {
 import { useTheme } from '../context/ThemeContext'
 import { useAccentTheme } from '../hooks/useAccentTheme'
 import { useDashboard } from '../context/DashboardContext'
+import { getStoredUser, isStoredUserAdmin } from '../utils/currentUser'
 
 const STEPPER_STEPS = [
   { key: 'placement', label: 'Placement', path: '/dashboard/placement' },
@@ -66,12 +67,8 @@ export default function DashboardLayout() {
     return false
   }
 
-  let user: { fullName?: string; email?: string; role?: 'student' | 'admin' } = { fullName: 'Student' }
-  try {
-    const raw = localStorage.getItem('smartlearner-current-user')
-    if (raw) user = JSON.parse(raw)
-  } catch (_) {}
-  const isAdmin = user?.role === 'admin'
+  const user = getStoredUser() ?? { fullName: 'Student' }
+  const isAdmin = isStoredUserAdmin()
   const visibleNavItems = NAV_ITEMS.filter((i) => (i.to === '/dashboard/resources' ? isAdmin : true))
 
   const handleLogout = () => {
@@ -136,7 +133,7 @@ export default function DashboardLayout() {
                   {user?.fullName ?? 'Student'}
                 </span>
                 <span className="mt-1 inline-flex items-center rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-[#E5E7EB] border border-white/10">
-                  Student
+                  {isAdmin ? 'Admin' : 'Student'}
                 </span>
               </div>
             </div>

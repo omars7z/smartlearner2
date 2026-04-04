@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Navigate } from 'react-router-dom'
 import { ExternalLink, Plus, RefreshCw } from 'lucide-react'
 import { useAccentTheme } from '../hooks/useAccentTheme'
 import { resourcesApi, type ResourceDto } from '../services/api'
+import { isStoredUserAdmin } from '../utils/currentUser'
 
 export default function DashboardResources() {
   const { accentPrimary, accentSecondary } = useAccentTheme()
+  const isAdmin = isStoredUserAdmin()
   const [items, setItems] = useState<ResourceDto[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -16,7 +19,7 @@ export default function DashboardResources() {
 
   const canSubmit = useMemo(() => title.trim().length >= 2 && url.trim().length >= 5, [title, url])
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -27,11 +30,12 @@ export default function DashboardResources() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    load()
-  }, [])
+    if (!isAdmin) return
+    void load()
+  }, [isAdmin, load])
 
   const add = async () => {
     if (!canSubmit) return
@@ -54,8 +58,12 @@ export default function DashboardResources() {
     }
   }
 
+  if (!isAdmin) {
+    return <Navigate to="/dashboard" replace />
+  }
+
   return (
-    <div className="w-full p-6">
+    <div className="flex-1 min-h-0 w-full overflow-y-auto p-6">
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
           <h2 className="text-xl font-semibold text-[color:var(--text-primary)]">Resources</h2>
