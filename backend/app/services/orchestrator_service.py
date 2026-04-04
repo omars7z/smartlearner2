@@ -4,7 +4,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.course_repository import CourseRepository
-from app.services.agents import LessonAgent, PlacementAgent, QAAgent, SyllabusAgent
+from app.services.agents import (
+    AgentValidationError,
+    LessonGeneratorAgent,
+    LessonValidatorAgent,
+    PlacementGeneratorAgent,
+    PlacementValidatorAgent,
+    QAGeneratorAgent,
+    QAValidatorAgent,
+    SyllabusGeneratorAgent,
+    SyllabusValidatorAgent,
+)
 from app.services.guardrails import run_exam_code_in_sandbox
 from app.services.llm_client import LLMClient
 from app.services.rag_service import RAGService
@@ -48,28 +58,85 @@ class OrchestratorService:
         self.course_repo = CourseRepository(db)
         self.agent_repo = AgentRepository(db)
 
-        self.placement_agent = PlacementAgent("placement", self.llm, self.rag)
-        self.syllabus_agent = SyllabusAgent("syllabus", self.llm)
-        self.lesson_agent = LessonAgent(self.llm, self.rag)
-        self.qa_agent = QAAgent(self.llm, self.rag)
+        self.placement_generator = PlacementGeneratorAgent(self.llm, self.rag)
+        self.placement_validator = PlacementValidatorAgent()
+        self.syllabus_generator = SyllabusGeneratorAgent(self.llm)
+        self.syllabus_validator = SyllabusValidatorAgent()
+        self.lesson_generator = LessonGeneratorAgent(self.llm, self.rag)
+        self.lesson_validator = LessonValidatorAgent()
+        self.qa_generator = QAGeneratorAgent(self.llm, self.rag)
+        self.qa_validator = QAValidatorAgent()
 
     async def create_placement_test(self, user_id: int, level: str, question_count: int) -> dict:
-        generated = self.placement_agent.generate_and_validate(level=level, question_count=question_count)
-        placement = await self.course_repo.create_placement_test(user_id=user_id, questions_json=generated)
+        raw = self.placement_generator.generate(level=level, question_count=question_count)
         await self.agent_repo.log_run(
-            agent_name="placement",
-            stage="generator-validator",
+            agent_name=self.placement_generator.name,
+            stage="generate",
+            input_json={"level": level, "question_count": question_count, "flow": "generate"},
+            output_json=raw,
+            is_valid=True,
+            user_id=user_id,
+        )
+        try:
+            generated = self.placement_validator.validate(raw, level, question_count)
+        except AgentValidationError as exc:
+            await self.agent_repo.log_run(
+                agent_name=self.placement_validator.name,
+                stage="validate",
+                input_json={"level": level, "question_count": question_count},
+                output_json={"error": str(exc)},
+                is_valid=False,
+                user_id=user_id,
+            )
+            raise
+        await self.agent_repo.log_run(
+            agent_name=self.placement_validator.name,
+            stage="validate",
             input_json={"level": level, "question_count": question_count},
             output_json=generated,
             is_valid=True,
             user_id=user_id,
         )
+        placement = await self.course_repo.create_placement_test(user_id=user_id, questions_json=generated)
         return {"placement_id": placement.id, "questions": generated["questions"]}
 
     async def start_placement_session(self, user_id: int, track: str) -> dict:
         level = _track_to_level(track)
         question_count = 5
-        generated = self.placement_agent.generate_and_validate(level=level, question_count=question_count)
+        raw = self.placement_generator.generate(level=level, question_count=question_count)
+        await self.agent_repo.log_run(
+            agent_name=self.placement_generator.name,
+            stage="generate",
+            input_json={
+                "level": level,
+                "question_count": question_count,
+                "track": track,
+                "flow": "session",
+            },
+            output_json=raw,
+            is_valid=True,
+            user_id=user_id,
+        )
+        try:
+            generated = self.placement_validator.validate(raw, level, question_count)
+        except AgentValidationError as exc:
+            await self.agent_repo.log_run(
+                agent_name=self.placement_validator.name,
+                stage="validate",
+                input_json={"level": level, "question_count": question_count, "track": track},
+                output_json={"error": str(exc)},
+                is_valid=False,
+                user_id=user_id,
+            )
+            raise
+        await self.agent_repo.log_run(
+            agent_name=self.placement_validator.name,
+            stage="validate",
+            input_json={"level": level, "question_count": question_count, "track": track},
+            output_json=generated,
+            is_valid=True,
+            user_id=user_id,
+        )
         full_payload = {
             **generated,
             "placement_session": {
@@ -82,14 +149,6 @@ class OrchestratorService:
             },
         }
         placement = await self.course_repo.create_placement_test(user_id=user_id, questions_json=full_payload)
-        await self.agent_repo.log_run(
-            agent_name="placement",
-            stage="generator-validator",
-            input_json={"level": level, "question_count": question_count, "track": track, "flow": "session"},
-            output_json=generated,
-            is_valid=True,
-            user_id=user_id,
-        )
         questions = generated["questions"]
         n = len(questions)
         next_q = _format_placement_question(questions[0], 0, n, track)
@@ -196,10 +255,38 @@ class OrchestratorService:
             raise ValueError("Placement test not found")
         score = placement.score or 0
         level_str = _score_to_level(score)
-        generated = self.syllabus_agent.generate_and_validate(score=score, level=level_str)
-        
-        # Transform lessons from SyllabusAgent format to CourseRepository format
-        # SyllabusAgent returns: {"topic": str, "description": str}
+        raw_syllabus = self.syllabus_generator.generate(score=score, level=level_str)
+        await self.agent_repo.log_run(
+            agent_name=self.syllabus_generator.name,
+            stage="generate",
+            input_json={"placement_id": placement_id, "score": score, "level": level_str, "course_title": course_title},
+            output_json=raw_syllabus,
+            is_valid=True,
+            user_id=user_id,
+        )
+        try:
+            generated = self.syllabus_validator.validate(raw_syllabus)
+        except AgentValidationError as exc:
+            await self.agent_repo.log_run(
+                agent_name=self.syllabus_validator.name,
+                stage="validate",
+                input_json={"placement_id": placement_id, "score": score, "level": level_str},
+                output_json={"error": str(exc)},
+                is_valid=False,
+                user_id=user_id,
+            )
+            raise
+        await self.agent_repo.log_run(
+            agent_name=self.syllabus_validator.name,
+            stage="validate",
+            input_json={"placement_id": placement_id, "score": score, "level": level_str},
+            output_json=generated,
+            is_valid=True,
+            user_id=user_id,
+        )
+
+        # Transform lessons from syllabus format to CourseRepository format
+        # Syllabus returns: {"topic": str, "description": str}
         # CourseRepository expects: {"title": str, "topic": str, "prerequisites": [], "markdown_content": str}
         transformed_lessons = []
         for idx, lesson in enumerate(generated.get("lessons", []), start=1):
@@ -221,15 +308,6 @@ class OrchestratorService:
         course = await self.course_repo.get_course_with_lessons(course.id)
         if course is None:
             raise ValueError("Failed to retrieve created course with lessons")
-        
-        await self.agent_repo.log_run(
-            agent_name="syllabus",
-            stage="generator-validator",
-            input_json={"placement_id": placement_id, "score": score, "level": level_str},
-            output_json=generated,
-            is_valid=True,
-            user_id=user_id,
-        )
         
         # Transform to frontend ModuleDto format with embedded lessons
         # Each lesson becomes a module with one lesson inside
@@ -278,16 +356,36 @@ class OrchestratorService:
         lesson = await self.db.get(Lesson, lesson_id)
         if lesson is None:
             raise ValueError("Lesson not found")
-        generated = self.lesson_agent.generate_and_validate(topic=lesson.topic)
-        updated = await self.course_repo.update_lesson_content(lesson.id, generated["markdown"])
+        raw_lesson = self.lesson_generator.generate(topic=lesson.topic)
         await self.agent_repo.log_run(
-            agent_name="lesson",
-            stage="generator-validator",
+            agent_name=self.lesson_generator.name,
+            stage="generate",
+            input_json={"lesson_id": lesson_id, "topic": lesson.topic},
+            output_json=raw_lesson,
+            is_valid=True,
+            user_id=user_id,
+        )
+        try:
+            generated = self.lesson_validator.validate(raw_lesson)
+        except AgentValidationError as exc:
+            await self.agent_repo.log_run(
+                agent_name=self.lesson_validator.name,
+                stage="validate",
+                input_json={"lesson_id": lesson_id, "topic": lesson.topic},
+                output_json={"error": str(exc)},
+                is_valid=False,
+                user_id=user_id,
+            )
+            raise
+        await self.agent_repo.log_run(
+            agent_name=self.lesson_validator.name,
+            stage="validate",
             input_json={"lesson_id": lesson_id, "topic": lesson.topic},
             output_json=generated,
             is_valid=True,
             user_id=user_id,
         )
+        updated = await self.course_repo.update_lesson_content(lesson.id, generated["markdown"])
         
         # Format response matching frontend StructuredLesson interface
         return {
@@ -333,10 +431,38 @@ class OrchestratorService:
         if not lesson_markdown:
             lesson_markdown = "General Python Foundations (Python Basics)."
 
-        generated = self.qa_agent.generate_and_validate(question=question, lesson_markdown=lesson_markdown)
+        raw_qa = self.qa_generator.generate(question=question, lesson_markdown=lesson_markdown)
         await self.agent_repo.log_run(
-            agent_name="qa",
-            stage="generator-validator",
+            agent_name=self.qa_generator.name,
+            stage="generate",
+            input_json={
+                "lesson_id": lesson_id,
+                "current_topic": current_topic,
+                "question": question,
+            },
+            output_json=raw_qa,
+            is_valid=True,
+            user_id=user_id,
+        )
+        try:
+            generated = self.qa_validator.validate(raw_qa)
+        except AgentValidationError as exc:
+            await self.agent_repo.log_run(
+                agent_name=self.qa_validator.name,
+                stage="validate",
+                input_json={
+                    "lesson_id": lesson_id,
+                    "current_topic": current_topic,
+                    "question": question,
+                },
+                output_json={"error": str(exc)},
+                is_valid=False,
+                user_id=user_id,
+            )
+            raise
+        await self.agent_repo.log_run(
+            agent_name=self.qa_validator.name,
+            stage="validate",
             input_json={
                 "lesson_id": lesson_id,
                 "current_topic": current_topic,
@@ -362,7 +488,7 @@ class OrchestratorService:
                 },
                 "rag": rag,
             },
-            "routing": {"steps": ["sanitize", "rag_retrieve", "llm_json", "validate"]},
+            "routing": {"steps": ["sanitize", "rag_retrieve", "qa_generator", "qa_validator"]},
         }
 
     async def run_exam_code(self, code: str) -> dict:
