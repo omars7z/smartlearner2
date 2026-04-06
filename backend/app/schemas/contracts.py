@@ -23,8 +23,8 @@ class LoginRequest(BaseModel):
 
 
 class PlacementGenerationRequest(BaseModel):
-    level: str = "Beginner"
-    question_count: int = Field(default=5, ge=5, le=10)
+    level: str = "beginner"
+    question_count: int = Field(default=5, ge=5, le=5)
 
 
 class PlacementSubmissionRequest(BaseModel):

@@ -57,7 +57,7 @@ export default function DashboardSyllabus() {
     setLoading(true)
     setLastError(null)
     try {
-      const courseTitle = `Python ${placement.level} Course`
+      const courseTitle = `Python ${String(placement.level).replace(/_/g, ' ')} Course`
       const data = await syllabusApi.generate(placementId, courseTitle)
       const envelope = data as { result?: { syllabus?: ModuleDto[]; modules?: ModuleDto[]; track?: string }; syllabus?: ModuleDto[]; modules?: ModuleDto[] }
       const resolved = envelope.result ?? envelope

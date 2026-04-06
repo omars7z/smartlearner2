@@ -16,16 +16,20 @@ class Settings(BaseSettings):
     fast_model: str = Field(default="llama-3.1-8b-instant", alias="FAST_MODEL")
     smart_model: str = Field(default="llama-3.3-70b-versatile", alias="SMART_MODEL")
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
+    groq_api_key_validators: str | None = Field(default=None, alias="GROQ_API_KEY_VALIDATORS")
 
     embedding_model: str = Field(default="all-MiniLM-L6-v2", alias="EMBEDDING_MODEL")
     vector_db_path: str = Field(default="./vector_db", alias="VECTOR_DB_PATH")
 
     source_resource: str = Field(
-        default="Automate the Boring Stuff with Python (Al Sweigart)",
+        default=(
+            "Python for Everybody (University of Michigan; Coursera) — "
+            "https://www.coursera.org/specializations/python"
+        ),
         alias="SOURCE_RESOURCE",
     )
     source_scope: str = Field(
-        default="Track: Python Foundations | Chapter: Python Basics",
+        default="Open textbook & materials: https://www.py4e.com/ | Track: Python Foundations",
         alias="SOURCE_SCOPE",
     )
 

@@ -53,7 +53,7 @@ export default function Placement() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       setPlacementId(data.placement_id)
-      setCurrentQuestion(data.questions[0]) // Assuming it returns all, but we'll show first
+      setCurrentQuestion(data.next_question ?? null)
     } catch (err) {
       console.error(err)
       setError('Failed to start placement test. Check backend on localhost:8000.')

@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { applyGroqLimitsFromResponseHeaders } from '../lib/groqRateLimitsStore'
 
 const API_BASE = 'http://localhost:8000/api/v1'
 
@@ -15,9 +16,26 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+function headersToRecord(h: unknown): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!h || typeof h !== 'object') return out
+  const obj = h as Record<string, unknown>
+  for (const key of Object.keys(obj)) {
+    const val = obj[key]
+    if (val != null && val !== '') out[key] = String(val)
+  }
+  return out
+}
+
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    applyGroqLimitsFromResponseHeaders(headersToRecord(response.headers))
+    return response
+  },
   (error) => {
+    if (error?.response?.headers) {
+      applyGroqLimitsFromResponseHeaders(headersToRecord(error.response.headers))
+    }
     if (error?.response?.status === 401) {
       localStorage.removeItem('smartlearner_token')
       localStorage.removeItem('smartlearner-current-user')
@@ -129,9 +147,14 @@ export interface PlacementQuestionDto {
   order: number
   total: number
   text: string
-  difficulty: 'easy' | 'medium' | 'hard'
+  difficulty: string
   topic: string
   options: string[]
+  level?: string
+  level_label?: string
+  level_index?: number
+  level_stage?: number
+  levels_total?: number
 }
 
 export interface StartPlacementResponse {
@@ -156,6 +179,15 @@ export interface PlacementFullResult {
   strong_topics: string[]
   weak_topics: string[]
   recommended_start_topic: string
+  final_level?: string
+  levels_passed?: string[]
+  stopped_reason?: 'failed_level' | 'completed_all'
+  passed_all_tiers?: boolean
+  /** Correct count in the last 5-question stage (where pass/fail was decided). */
+  last_block_correct?: number
+  last_block_total?: number
+  /** Total answers submitted across the whole placement run. */
+  total_answered?: number
 }
 
 export const placementApi = {

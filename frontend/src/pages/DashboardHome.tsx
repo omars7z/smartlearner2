@@ -110,7 +110,10 @@ export default function DashboardHome() {
     }
     setSyllabusLoading(true)
     try {
-      const data = await syllabusApi.generate(placementId, `Python ${fullPlacementResult.level} Course`)
+      const data = await syllabusApi.generate(
+        placementId,
+        `Python ${String(fullPlacementResult.level).replace(/_/g, ' ')} Course`
+      )
       const modules = data.result?.syllabus ?? []
       if (modules.length) {
         setSyllabusModules(modules)

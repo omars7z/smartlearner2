@@ -112,7 +112,7 @@ export default function DashboardQA() {
         mastery_level: masteryLevel,
         knowledge_map: knowledgeMap,
       }
-      // Book-wide Q&A: do not scope by current_topic; backend uses RAG + Automate the Boring Stuff grounding.
+      // Course-wide Q&A: do not scope by current_topic; backend uses RAG + Python for Everybody grounding.
       const data = await qaApi.ask(q, undefined, studentContext)
       const result = data.result ?? {}
       const rag = (result.rag ?? {}) as Record<string, unknown>
@@ -215,8 +215,8 @@ export default function DashboardQA() {
           <div className="min-w-0 flex-1">
             <h1 className="text-lg font-semibold text-[color:var(--text-primary)]">Ask AI Agents</h1>
             <p className="text-xs text-[color:var(--text-muted)] mt-1 max-w-xl">
-              Answers are grounded in <span className="text-[color:var(--text-secondary)]">Automate the Boring Stuff with Python</span>{' '}
-              (Python Basics and related material from the book via RAG)—ask anything covered there.
+              Answers are grounded in <span className="text-[color:var(--text-secondary)]">Python for Everybody</span>{' '}
+              (University of Michigan / Coursera open materials at py4e.com, via RAG)—ask anything covered there.
             </p>
             <div className="flex flex-wrap gap-1.5 mt-2">
               {['MCP', 'RAG', 'Explain', 'Validate', 'Analytics'].map((label) => (
@@ -240,7 +240,7 @@ export default function DashboardQA() {
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
           <p className="text-center text-[color:var(--text-muted)] py-8 max-w-md mx-auto">
-            Ask about Python concepts, syntax, and examples as presented in the book. Analytics still sync from your session when available.
+            Ask about Python concepts, syntax, and examples as presented in the course text. Analytics still sync from your session when available.
           </p>
         )}
         {messages.map((m, idx) => (

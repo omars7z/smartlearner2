@@ -24,7 +24,7 @@ class RAGService:
     def retrieve_python_basics_context(self, query: str, k: int = 3) -> list[str]:
         if not self.chunks:
             return [
-                "Automate the Boring Stuff with Python (Python Basics): expressions evaluate to values.",
+                "Python for Everybody (Variables, expressions, and statements): expressions evaluate to values.",
                 "Python data types include integers, floats, strings, and booleans.",
                 "String replication uses the * operator with a string and integer.",
             ]

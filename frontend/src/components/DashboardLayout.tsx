@@ -23,6 +23,7 @@ import { useTheme } from '../context/ThemeContext'
 import { useAccentTheme } from '../hooks/useAccentTheme'
 import { useDashboard } from '../context/DashboardContext'
 import { getStoredUser, isStoredUserAdmin } from '../utils/currentUser'
+import GroqRateLimitBanner from './GroqRateLimitBanner'
 
 const STEPPER_STEPS = [
   { key: 'placement', label: 'Placement', path: '/dashboard/placement' },
@@ -328,6 +329,7 @@ export default function DashboardLayout() {
           <div className="flex-1 min-h-0 flex" style={{ overflowY: 'auto' }}>
             <Outlet />
           </div>
+          <GroqRateLimitBanner />
         </main>
       </div>
     </motion.div>

@@ -10,3 +10,8 @@ groq
 langchain
 langchain-groq
 numpy
+requests
+beautifulsoup4
+sentence-transformers
+faiss-cpu
+pypdf

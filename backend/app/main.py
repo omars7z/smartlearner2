@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api.routes import router
+from app.core.groq_rate_limits import response_header_pairs
 from app.db.base import Base
 from app.db.session import engine
 from app.models import entities  # noqa: F401
@@ -38,6 +39,13 @@ async def lifespan(_: FastAPI):
     yield
 
 
+_EXPOSE_RATE_HEADERS = [
+    "X-App-RateLimit-Limit-Requests",
+    "X-App-RateLimit-Remaining-Requests",
+    "X-App-RateLimit-Reset-Requests",
+    "X-App-RateLimit-Remaining-Tokens",
+]
+
 app = FastAPI(title="SmartLearner 2.0 Backend", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
@@ -48,11 +56,24 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=_EXPOSE_RATE_HEADERS,
 )
+
+
+@app.middleware("http")
+async def attach_groq_rate_limit_headers(request, call_next):
+    response = await call_next(request)
+    for name, value in response_header_pairs():
+        response.headers[name] = value
+    return response
+
+
 app.include_router(router)
 
 

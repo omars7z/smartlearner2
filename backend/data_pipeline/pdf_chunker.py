@@ -32,74 +32,89 @@ class BookChunker:
 
   # Minimal config; extend as needed.
   BOOK_CONFIG: Dict[str, Dict[str, Any]] = {
-    "python_automatetheboringstuff": {
+    "python_py4e": {
       "track": "Python Foundations",
       "folder": "backend/data/books/python",
       "chapters": {
-        "intro": {
+        "py4e_01_intro": {
           "title": "Introduction",
           "difficulty": "beginner",
           "topics": ["introduction"],
         },
-        "ch01_basics": {
-          "title": "Python Basics",
+        "py4e_02_variables": {
+          "title": "Variables, Expressions, and Statements",
           "difficulty": "beginner",
           "topics": ["python_basics"],
         },
-        "ch02_flow": {
-          "title": "Flow Control",
+        "py4e_03_conditional": {
+          "title": "Conditionals",
           "difficulty": "beginner",
           "topics": ["control_flow"],
         },
-        "ch03_functions": {
+        "py4e_04_functions": {
           "title": "Functions",
           "difficulty": "beginner",
           "topics": ["functions"],
         },
-        "ch04_lists": {
-          "title": "Lists",
+        "py4e_05_iterations": {
+          "title": "Iterations",
           "difficulty": "beginner",
-          "topics": ["lists"],
+          "topics": ["control_flow"],
         },
-        "ch05_dicts": {
-          "title": "Dictionaries",
-          "difficulty": "beginner",
-          "topics": ["dictionaries"],
-        },
-        "ch06_strings": {
+        "py4e_06_strings": {
           "title": "Strings",
           "difficulty": "beginner",
           "topics": ["strings"],
         },
-        "ch07_regex": {
+        "py4e_07_files": {
+          "title": "Files",
+          "difficulty": "intermediate",
+          "topics": ["file_io"],
+        },
+        "py4e_08_lists": {
+          "title": "Lists",
+          "difficulty": "intermediate",
+          "topics": ["lists"],
+        },
+        "py4e_09_dictionaries": {
+          "title": "Dictionaries",
+          "difficulty": "intermediate",
+          "topics": ["dictionaries"],
+        },
+        "py4e_10_tuples": {
+          "title": "Tuples",
+          "difficulty": "intermediate",
+          "topics": ["tuples"],
+        },
+        "py4e_11_regex": {
           "title": "Regular Expressions",
           "difficulty": "intermediate",
           "topics": ["regex"],
         },
-        "ch08_input": {
-          "title": "Input Validation",
-          "difficulty": "intermediate",
-          "topics": ["input_validation"],
-        },
-        "ch09_files": {
-          "title": "Reading and Writing Files",
-          "difficulty": "intermediate",
-          "topics": ["file_io"],
-        },
-        "ch10_organize": {
-          "title": "Organizing Files",
-          "difficulty": "intermediate",
-          "topics": ["filesystem"],
-        },
-        "ch11_debug": {
-          "title": "Debugging",
-          "difficulty": "intermediate",
-          "topics": ["debugging"],
-        },
-        "ch12_scraping": {
-          "title": "Web Scraping",
+        "py4e_12_network": {
+          "title": "Networked Programs",
           "difficulty": "advanced",
-          "topics": ["web_scraping"],
+          "topics": ["networking"],
+        },
+        "py4e_13_web": {
+          "title": "Python and Web Services",
+          "difficulty": "advanced",
+          "topics": ["web_services"],
+        },
+        "py4e_14_objects": {
+          "title": "Python Objects",
+          "difficulty": "advanced",
+          "topics": ["oop"],
+        },
+        "py4e_15_database": {
+          "title": "Python and Databases",
+          "difficulty": "advanced",
+          "topics": ["databases"],
+        },
+        "py4e_16_viz": {
+          "title": "Data Visualization",
+          "difficulty": "advanced",
+          "topics": ["visualization"],
         },
       },
     },
@@ -322,7 +337,7 @@ def main() -> None:
   chunker = BookChunker()
 
   total = 0
-  for book_key in ["python_automatetheboringstuff"]:
+  for book_key in ["python_py4e"]:
     print(f"Processing book: {book_key}")
     n = chunker.process_book(book_key)
     total += n

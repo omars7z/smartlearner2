@@ -15,6 +15,7 @@ import DashboardQA from './pages/DashboardQA'
 import DashboardSettings from './pages/DashboardSettings'
 import DashboardResources from './pages/DashboardResources'
 import { ToastContainer } from './components/ToastContainer'
+import { RateLimitProvider } from './context/RateLimitContext'
 
 function App() {
   return (
@@ -27,9 +28,11 @@ function App() {
           <Route
             path="/dashboard"
             element={
-              <DashboardProvider>
-                <DashboardLayout />
-              </DashboardProvider>
+              <RateLimitProvider>
+                <DashboardProvider>
+                  <DashboardLayout />
+                </DashboardProvider>
+              </RateLimitProvider>
             }
           >
             <Route index element={<DashboardHome />} />

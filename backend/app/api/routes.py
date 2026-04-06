@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.groq_rate_limits import snapshot_json
 from app.core.security import create_access_token, get_current_user, get_current_user_id, get_password_hash, verify_password
 from app.db.session import get_db
 from app.repositories.course_repository import CourseRepository
@@ -117,7 +118,10 @@ async def generate_placement(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     service = OrchestratorService(db)
-    return await service.create_placement_test(user_id, payload.level, payload.question_count)
+    try:
+        return await service.create_placement_test(user_id, payload.level, payload.question_count)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
 @router.post("/placement/submit")
@@ -258,3 +262,9 @@ async def create_resource(
         description=r.description,
         created_by_user_id=r.created_by_user_id,
     )
+
+
+@router.get("/usage/rate-limits")
+async def get_groq_rate_limits(_user_id: Annotated[int, Depends(get_current_user_id)]) -> dict:
+    """Last Groq rate-limit snapshot from the server (in-memory; updates after LLM calls)."""
+    return snapshot_json()

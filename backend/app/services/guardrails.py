@@ -15,7 +15,44 @@ INJECTION_PATTERNS = [
 ]
 
 OUT_OF_SCOPE_TOPICS = {"asyncio", "metaclass", "c extensions", "threading internals"}
-SOURCE_KEY_CONCEPTS = {"expressions", "data types", "string replication", "variable assignment"}
+# Any lesson must touch at least one of these (lowercased match) so scope stays pedagogical, not arbitrary chat.
+# Covers Python for Everybody–style topics beyond the intro chapter.
+SOURCE_KEY_CONCEPTS = frozenset(
+    {
+        "expressions",
+        "data types",
+        "string replication",
+        "variable assignment",
+        "variable",
+        "function",
+        "def ",
+        "loop",
+        "for ",
+        "while ",
+        "list",
+        "dictionary",
+        "tuple",
+        "string",
+        "file",
+        "open(",
+        "condition",
+        "if ",
+        "class ",
+        "import ",
+        "module",
+        "regex",
+        "network",
+        "socket",
+        "database",
+        "sql",
+        "visualization",
+        "object",
+        "method",
+        "iteration",
+        "syntax",
+        "algorithm",
+    }
+)
 
 
 def sanitize_prompt(text: str) -> str:
@@ -40,8 +77,8 @@ def validate_content_scope(markdown: str) -> tuple[bool, str]:
         if topic in lowered:
             return False, f"Out of scope topic detected: {topic}"
     if not any(concept in lowered for concept in SOURCE_KEY_CONCEPTS):
-        return False, "Missing required source concept citation."
-    if "automate the boring stuff" not in lowered:
+        return False, "Missing required source concept citation (no recognized Python topic terms)."
+    if "python for everybody" not in lowered:
         return False, "Lesson must cite the canonical source."
     return True, "ok"
 

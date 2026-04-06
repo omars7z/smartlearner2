@@ -3,7 +3,7 @@ from __future__ import annotations
 import requests
 from bs4 import BeautifulSoup
 
-url = "https://automatetheboringstuff.com/2e/chapter4/"
+url = "https://www.py4e.com/html3/08-lists.php"
 headers = {"User-Agent": "Mozilla/5.0"}
 r = requests.get(url, headers=headers, timeout=20)
 print("status:", r.status_code)

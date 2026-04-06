@@ -14,6 +14,9 @@ interface NormalizedQuestion {
   question_text: string
   options: { id: string; text: string }[]
   difficulty: string
+  level_label?: string
+  level_stage?: number
+  levels_total?: number
 }
 
 function normalizeQuestion(data: Record<string, unknown> | null): NormalizedQuestion | null {
@@ -29,6 +32,9 @@ function normalizeQuestion(data: Record<string, unknown> | null): NormalizedQues
   return {
     question_id: (data.question_id as string) ?? (data.id as string) ?? '',
     question_text: (data.question_text as string) ?? (data.question as string) ?? (data.text as string) ?? '',
+    level_label: (data.level_label as string) || undefined,
+    level_stage: typeof data.level_stage === 'number' ? data.level_stage : undefined,
+    levels_total: typeof data.levels_total === 'number' ? data.levels_total : undefined,
     options: hasOptObjects
       ? (optsArray as { id: string; text: string }[])
       : [
@@ -57,7 +63,8 @@ export default function DashboardPlacement() {
   const [busy, setBusy] = useState(false)
   const [currentQuestion, setCurrentQuestion] = useState<NormalizedQuestion | null>(null)
   const [questionNum, setQuestionNum] = useState(0)
-  const [totalQuestions, setTotalQuestions] = useState(10)
+  const QUESTIONS_PER_LEVEL = 5
+  const [totalQuestions, setTotalQuestions] = useState(QUESTIONS_PER_LEVEL)
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null)
   const [results, setResults] = useState<PlacementFullResult | null>(null)
   const [trackId, setTrackId] = useState<string>('python')
@@ -116,7 +123,7 @@ export default function DashboardPlacement() {
       const finished = data.finished ?? data.completed ?? false
       const nextRaw = (data as any).next_question ?? (data as any).question ?? res
 
-      if (finished || questionNum >= totalQuestions) {
+      if (finished) {
         const placementResult = data.placement_result ?? (res as { placement_result?: PlacementFullResult }).placement_result ?? null
         if (placementResult) {
           setPlacementDone(
@@ -252,11 +259,24 @@ export default function DashboardPlacement() {
               <div className="h-2 rounded-full bg-slate-700 overflow-hidden mb-6">
                 <div
                   className="h-full rounded-full transition-all"
-                  style={{ width: `${(questionNum / totalQuestions) * 100}%`, background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})` }}
+                  style={{
+                    width: `${(questionNum / Math.max(totalQuestions, 1)) * 100}%`,
+                    background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})`,
+                  }}
                 />
               </div>
+              {(currentQuestion.level_stage != null || currentQuestion.level_label) && (
+                <p className="text-xs text-[color:var(--text-secondary)] mb-1">
+                  {currentQuestion.level_stage != null && currentQuestion.levels_total != null
+                    ? `Stage ${currentQuestion.level_stage} of ${currentQuestion.levels_total}`
+                    : null}
+                  {currentQuestion.level_label
+                    ? `${currentQuestion.level_stage != null ? ' · ' : ''}${currentQuestion.level_label}`
+                    : null}
+                </p>
+              )}
               <p className="text-sm text-[color:var(--text-muted)] mb-2">
-                Question {questionNum} of {totalQuestions}
+                Question {questionNum} of {totalQuestions} (need 4/5 to advance)
               </p>
               <h2 className="text-xl font-semibold text-[color:var(--text-primary)] mb-6 leading-snug">
                 {currentQuestion.question_text}
@@ -287,7 +307,7 @@ export default function DashboardPlacement() {
                 className="w-full rounded-xl py-3 font-semibold text-white disabled:opacity-50 transition"
                 style={{ background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})` }}
               >
-                {busy ? 'Submitting…' : questionNum >= totalQuestions ? 'Finish Test' : 'Next Question'}
+                {busy ? 'Submitting…' : 'Submit answer'}
               </button>
             </motion.div>
           )}
@@ -302,18 +322,48 @@ export default function DashboardPlacement() {
               style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)' }}
             >
               <h2 className="text-2xl font-bold text-[color:var(--text-primary)] mb-6 text-center">Your Result</h2>
-              <div
-                className="inline-block px-6 py-2 rounded-xl text-lg font-bold uppercase mb-6 mx-auto flex justify-center"
-                style={{
-                  color: 'white',
-                  backgroundColor:
-                    results.level === 'advanced' ? '#dc2626' : results.level === 'intermediate' ? '#ca8a04' : '#16a34a',
-                }}
-              >
-                {results.level}
+              <div className="flex justify-center mb-6">
+                <div
+                  className="px-6 py-2 rounded-xl text-lg font-bold uppercase"
+                  style={{
+                    color: 'white',
+                    backgroundColor:
+                      results.level === 'very_advanced'
+                        ? '#7c3aed'
+                        : results.level === 'advanced'
+                          ? '#dc2626'
+                          : results.level === 'intermediate'
+                            ? '#ca8a04'
+                            : '#16a34a',
+                  }}
+                >
+                  {results.level.replace(/_/g, ' ')}
+                </div>
               </div>
+              <p className="text-center text-[color:var(--text-muted)] text-sm mb-2">
+                {results.stopped_reason === 'completed_all'
+                  ? 'You passed all four stages.'
+                  : results.stopped_reason === 'failed_level'
+                    ? 'Stopped at this stage (fewer than 4 correct in the last block).'
+                    : null}
+              </p>
+              {results.levels_passed && results.levels_passed.length > 0 && (
+                <p className="text-center text-[color:var(--text-secondary)] text-xs mb-4">
+                  Stages cleared: {results.levels_passed.map((l) => l.replace(/_/g, ' ')).join(' → ')}
+                </p>
+              )}
               <p className="text-center text-[color:var(--text-primary)] mb-6">
-                Score: <strong>{results.score}</strong> / {totalQuestions} points ({results.percentage}%)
+                Last stage:{' '}
+                <strong>
+                  {results.last_block_correct ?? '—'}/{results.last_block_total ?? 5}
+                </strong>{' '}
+                correct (need 4/5 to advance).
+                {results.total_answered != null && (
+                  <span className="block text-sm text-[color:var(--text-muted)] mt-1">
+                    Overall: {results.score}/{results.total_answered} correct (
+                    {results.percentage}%)
+                  </span>
+                )}
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                 <div className="rounded-xl p-4 border border-emerald-500/30 bg-emerald-500/10">
