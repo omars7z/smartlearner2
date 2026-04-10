@@ -16,7 +16,7 @@ from app.services.agents import (
     SyllabusGeneratorAgent,
     SyllabusValidatorAgent,
 )
-from app.services.guardrails import run_exam_code_in_sandbox
+from app.services.guardrails import run_exam_code_in_sandbox, sanitize_prompt
 from app.services.llm_client import LLMClient
 from app.services.rag_service import RAGService
 
@@ -571,6 +571,10 @@ class OrchestratorService:
     ) -> dict:
         from app.models.entities import Lesson
 
+        safe_q = sanitize_prompt(question)
+        if not self.rag.is_likely_book_related_question(safe_q):
+            return self._qa_py4e_only_envelope()
+
         lesson_markdown = ""
         if lesson_id is not None and lesson_id != 0:
             lesson = await self.db.get(Lesson, lesson_id)
@@ -628,6 +632,29 @@ class OrchestratorService:
             user_id=user_id,
         )
         return self._qa_envelope(generated)
+
+    def _qa_py4e_only_envelope(self) -> dict:
+        """No LLM call: question looks unrelated to PY4E book chunks (saves tokens)."""
+        msg = (
+            "I'm only the **Python for Everybody (PY4E)** chatbot for this course—I help with the book material "
+            "and your lessons. Ask something about PY4E or the topics in your course."
+        )
+        return {
+            "status": "ok",
+            "intent": "qa_py4e_scope",
+            "result": {
+                "status": "ok",
+                "explanation": {
+                    "core_explanation": msg,
+                },
+                "rag": {
+                    "chunks_used": 0,
+                    "selected_chunks": [],
+                    "skipped_llm": True,
+                },
+            },
+            "routing": {"steps": ["sanitize", "book_relevance_gate"]},
+        }
 
     def _qa_envelope(self, generated: dict) -> dict:
         """Shape expected by frontend QAResponse (result.explanation.core_explanation + result.rag)."""

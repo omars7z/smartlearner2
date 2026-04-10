@@ -34,7 +34,7 @@ class LLMClient:
             if hasattr(chat, "with_raw_response"):
                 raw = chat.with_raw_response.create(
                     model=model,
-                    temperature=0.2,
+                    temperature=0.4,
                     response_format={"type": "json_object"},
                     messages=[
                         {"role": "system", "content": system_prompt},

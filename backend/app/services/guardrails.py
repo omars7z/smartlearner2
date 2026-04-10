@@ -14,6 +14,11 @@ INJECTION_PATTERNS = [
     r"bypass",
 ]
 
+# If QA overlap with PY4E book chunks is below this, skip the LLM (saves tokens).
+QA_MIN_BOOK_RELEVANCE_SCORE = 0.022
+# Single-token questions must clear this (e.g. "lists", "variables"); chitchat is handled separately.
+QA_SINGLE_TOKEN_MIN_SCORE = 0.04
+
 OUT_OF_SCOPE_TOPICS = {"asyncio", "metaclass", "c extensions", "threading internals"}
 # Any lesson must touch at least one of these (lowercased match) so scope stays pedagogical, not arbitrary chat.
 # Covers Python for Everybody–style topics beyond the intro chapter.
