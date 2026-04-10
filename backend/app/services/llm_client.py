@@ -90,7 +90,12 @@ class LLMClient:
             from app.core.placement_rubric import concepts_for_level, normalize_level
 
             slot = 1
-            if "Question index:" in user_prompt:
+            if "Question slot" in user_prompt:
+                try:
+                    slot = int(user_prompt.split("Question slot")[1].split("of")[0].strip())
+                except Exception:
+                    slot = 1
+            elif "Question index:" in user_prompt:
                 try:
                     slot = int(user_prompt.split("Question index:")[1].split("of")[0].strip())
                 except Exception:

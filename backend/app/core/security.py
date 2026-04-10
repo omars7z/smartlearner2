@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
 import hashlib
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 import bcrypt
 from jose import JWTError, jwt
@@ -12,7 +13,9 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.repositories.user_repository import UserRepository
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
+# HTTPBearer (not OAuth2PasswordBearer): /auth/token expects JSON {email, password}, so Swagger's
+# OAuth2 password flow does not attach tokens to other requests. Bearer paste works reliably.
+http_bearer = HTTPBearer()
 
 
 def _password_preimage(password: str) -> bytes:
@@ -41,9 +44,10 @@ def create_access_token(subject: str) -> str:
 
 
 async def get_current_user_id(
-    token: Annotated[str, Depends(oauth2_scheme)],
+    creds: Annotated[HTTPAuthorizationCredentials, Depends(http_bearer)],
     db=Depends(get_db),
 ) -> int:
+    token = creds.credentials
     settings = get_settings()
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -66,9 +70,10 @@ async def get_current_user_id(
 
 
 async def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
+    creds: Annotated[HTTPAuthorizationCredentials, Depends(http_bearer)],
     db=Depends(get_db),
 ):
+    token = creds.credentials
     settings = get_settings()
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
