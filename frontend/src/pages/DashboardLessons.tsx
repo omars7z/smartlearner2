@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { BookOpen, ChevronDown, ChevronRight, ClipboardCheck } from 'lucide-react'
 import { useDashboard } from '../context/DashboardContext'
 import { useAccentTheme } from '../hooks/useAccentTheme'
@@ -89,6 +91,29 @@ export default function DashboardLessons() {
   }, [displayLesson?.lesson_id])
 
   const renderSection = (section: LessonSection, idx: number) => {
+    if (section.type === 'markdown') {
+      return (
+        <article
+          key={idx}
+          className="lesson-markdown text-[color:var(--text-secondary)] leading-relaxed
+            [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-[color:var(--text-primary)] [&_h2]:mt-8 [&_h2]:mb-3 [&_h2]:first:mt-0
+            [&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-[color:var(--text-primary)] [&_h3]:mt-5 [&_h3]:mb-2
+            [&_p]:mb-3 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:mb-3
+            [&_li]:mb-1 [&_strong]:text-[color:var(--text-primary)] [&_code]:text-sky-300 [&_code]:text-[0.9em]
+            [&_pre]:rounded-lg [&_pre]:border [&_pre]:p-4 [&_pre]:my-4 [&_pre]:overflow-x-auto [&_pre]:text-sm
+            [&_pre]:bg-[#0b1220] [&_pre]:text-slate-200 [&_blockquote]:border-l-4 [&_blockquote]:border-sky-500/40 [&_blockquote]:pl-4 [&_blockquote]:italic"
+        >
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              pre: ({ children }) => <pre className="not-prose">{children}</pre>,
+            }}
+          >
+            {section.content}
+          </ReactMarkdown>
+        </article>
+      )
+    }
     if (section.type === 'introduction') {
       return (
         <div key={idx} className="rounded-xl p-4 border border-sky-500/20 bg-sky-500/5">
@@ -229,37 +254,45 @@ export default function DashboardLessons() {
           <p className="text-xs text-[color:var(--text-muted)]">
             Generate your syllabus first to see lessons.
           </p>
-        ) : allLessons.length === 0 ? (
+        ) : syllabusModules.length === 0 ? (
           <p className="text-xs text-[color:var(--text-muted)]">No lessons in syllabus.</p>
         ) : (
-          <ul className="space-y-1">
-            {allLessons.map(({ lesson, module: mod }) => (
-              <li key={lesson.lesson_id}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedLesson(lesson)
-                    setCurrentLesson(lesson)
-                  }}
-                  className={`w-full text-left rounded-lg px-3 py-2 text-xs transition-colors ${
-                    displayLesson?.lesson_id === lesson.lesson_id
-                      ? 'text-white'
-                      : 'text-[color:var(--text-secondary)] hover:bg-white/10'
-                  }`}
-                  style={
-                    displayLesson?.lesson_id === lesson.lesson_id
-                      ? {
-                          background: `linear-gradient(135deg, ${accentPrimary}, ${accentSecondary})`,
+          <div className="space-y-4">
+            {syllabusModules.map((mod) => (
+              <div key={mod.module_id}>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-[color:var(--text-muted)] mb-2">
+                  {mod.title}
+                </p>
+                <ul className="space-y-1">
+                  {(mod.lessons || []).map((lesson) => (
+                    <li key={lesson.lesson_id}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedLesson(lesson)
+                          setCurrentLesson(lesson)
+                        }}
+                        className={`w-full text-left rounded-lg px-3 py-2 text-xs transition-colors ${
+                          displayLesson?.lesson_id === lesson.lesson_id
+                            ? 'text-white'
+                            : 'text-[color:var(--text-secondary)] hover:bg-white/10'
+                        }`}
+                        style={
+                          displayLesson?.lesson_id === lesson.lesson_id
+                            ? {
+                                background: `linear-gradient(135deg, ${accentPrimary}, ${accentSecondary})`,
+                              }
+                            : undefined
                         }
-                      : undefined
-                  }
-                >
-                  <span className="font-medium">{lesson.title}</span>
-                  <span className="block text-[10px] opacity-80 mt-0.5">{mod.title}</span>
-                </button>
-              </li>
+                      >
+                        <span className="font-medium leading-snug">{lesson.title}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
         {hasSyllabus && (
           <button
@@ -295,7 +328,7 @@ export default function DashboardLessons() {
             )}
           </div>
         ) : (
-          <div className="max-w-2xl">
+          <div className="max-w-3xl">
             <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300">
               {resolvedTopic ?? 'Lesson'}
             </span>

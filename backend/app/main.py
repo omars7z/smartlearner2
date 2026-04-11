@@ -31,10 +31,25 @@ async def _ensure_users_table_columns(conn) -> None:
         await conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'student' NOT NULL"))
 
 
+async def _ensure_lessons_table_columns(conn) -> None:
+    try:
+        rows = (await conn.execute(text("PRAGMA table_info(lessons)"))).fetchall()
+    except Exception:
+        return
+    if not rows:
+        return
+    existing_cols = {r[1] for r in rows}
+    if "unit_title" not in existing_cols:
+        await conn.execute(text("ALTER TABLE lessons ADD COLUMN unit_title VARCHAR(255)"))
+    if "metadata_json" not in existing_cols:
+        await conn.execute(text("ALTER TABLE lessons ADD COLUMN metadata_json TEXT DEFAULT '{}'"))
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
         await _ensure_users_table_columns(conn)
+        await _ensure_lessons_table_columns(conn)
         await conn.run_sync(Base.metadata.create_all)
     yield
 

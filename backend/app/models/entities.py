@@ -55,8 +55,10 @@ class Lesson(Base):
     title: Mapped[str] = mapped_column(String(255))
     topic: Mapped[str] = mapped_column(String(100))
     order_index: Mapped[int] = mapped_column(Integer)
+    unit_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     markdown_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     prerequisites_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
     course: Mapped["Course"] = relationship(back_populates="lessons")
 

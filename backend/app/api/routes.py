@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.groq_rate_limits import snapshot_json
+from app.core.py4e_curriculum import curriculum_payload
 from app.core.security import create_access_token, get_current_user, get_current_user_id, get_password_hash, verify_password
 from app.db.session import get_db
 from app.repositories.course_repository import CourseRepository
@@ -25,6 +26,7 @@ from app.schemas.contracts import (
     TokenResponse,
 )
 from app.services.agents import AgentValidationError
+from app.services.llm_client import LLMClientError
 from app.services.orchestrator_service import OrchestratorService
 
 router = APIRouter(prefix="/api/v1")
@@ -88,6 +90,8 @@ async def placement_start(
     service = OrchestratorService(db)
     try:
         return await service.start_placement_session(user_id, payload.track)
+    except LLMClientError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     except AgentValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
@@ -107,6 +111,8 @@ async def placement_answer(
             payload.question_id,
             payload.answer_index,
         )
+    except LLMClientError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
@@ -120,8 +126,16 @@ async def generate_placement(
     service = OrchestratorService(db)
     try:
         return await service.create_placement_test(user_id, payload.level, payload.question_count)
+    except LLMClientError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.get("/curriculum/py4e")
+async def get_py4e_curriculum() -> dict:
+    """Static PY4E outline: tiered tracks + per-chapter sub-lessons (textbook-style TOC)."""
+    return curriculum_payload()
 
 
 @router.post("/placement/submit")

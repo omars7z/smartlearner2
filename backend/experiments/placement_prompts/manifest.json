@@ -1,0 +1,10 @@
+{
+  "level": "beginner",
+  "run_validator": true,
+  "variants": [
+    {
+      "id": "baseline",
+      "note": "Default prompts from agents.py — duplicate this object, change id and prompts to compare"
+    }
+  ]
+}

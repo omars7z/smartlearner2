@@ -1,4 +1,5 @@
 import pickle
+import re
 from pathlib import Path
 
 import numpy as np
@@ -114,6 +115,29 @@ def _query_tokens_for_overlap(query: str) -> set[str]:
     return filtered if filtered else raw
 
 
+def _format_rag_passage(chunk: dict) -> str:
+    """Prefix chunk text with stable PY4E location tags for the LLM."""
+    text = str(chunk.get("text", "")).strip()
+    parts: list[str] = []
+    src = str(chunk.get("source", "") or "").strip()
+    ch = str(chunk.get("chapter_title", "") or "").strip()
+    sid = str(chunk.get("sub_lesson_id", "") or "").strip()
+    stitle = str(chunk.get("sub_lesson_title", "") or "").strip()
+    if src or ch or sid or stitle:
+        head = []
+        if src:
+            head.append(src)
+        if ch and ch not in head:
+            head.append(ch)
+        if sid:
+            head.append(f"sub_lesson:{sid}")
+        if stitle and stitle not in " ".join(head):
+            head.append(stitle)
+        parts.append("[" + " | ".join(head) + "]")
+    parts.append(text)
+    return "\n".join(parts)
+
+
 class RAGService:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -180,14 +204,41 @@ class RAGService:
         return score >= QA_MIN_BOOK_RELEVANCE_SCORE
 
     def retrieve_python_basics_context(self, query: str, k: int = 3) -> list[str]:
+        """
+        Lexical match over chunk text + TOC metadata (sub_lesson title/id, chapter).
+        Returns formatted strings so prompts cite PY4E subsection anchors.
+        """
         chunks = self._chunks_for_retrieval()
-        scored = []
-        q_tokens = set(query.lower().split())
+        q_raw = (query or "").strip()
+        q_tokens = {t for t in re.findall(r"[a-zA-Z_]{3,}", q_raw.lower())}
+        q_lower = q_raw.lower()
+        scored: list[tuple[float, dict]] = []
+
         for chunk in chunks:
             text = str(chunk.get("text", ""))
-            t_tokens = set(text.lower().split())
-            score = len(q_tokens.intersection(t_tokens)) / (np.sqrt(len(t_tokens) + 1))
-            scored.append((score, text))
+            sub_title = str(chunk.get("sub_lesson_title", "") or "")
+            sub_id = str(chunk.get("sub_lesson_id", "") or "")
+            chapter_title = str(chunk.get("chapter_title", "") or "")
+            meta_line = f"{sub_title} {sub_id} {chapter_title}".lower()
+            t_tokens = set(re.findall(r"[a-zA-Z_]{3,}", text.lower()))
+            t_tokens |= set(re.findall(r"[a-zA-Z_]{3,}", meta_line))
+            overlap = len(q_tokens.intersection(t_tokens))
+            score = overlap / (np.sqrt(len(t_tokens) + 1))
+            if sub_id and sub_id in q_lower:
+                score += 0.35
+            if sub_title and len(sub_title) > 5:
+                st_l = sub_title.lower()
+                if st_l in q_lower:
+                    score += 0.5
+                for w in re.findall(r"[a-zA-Z_]{4,}", st_l):
+                    if w in q_tokens:
+                        score += 0.08
+            scored.append((score, chunk))
+
         scored.sort(key=lambda x: x[0], reverse=True)
-        top = [text for _, text in scored[:k] if text]
-        return top
+        out: list[str] = []
+        for _, ch in scored[:k]:
+            passage = _format_rag_passage(ch)
+            if passage:
+                out.append(passage)
+        return out

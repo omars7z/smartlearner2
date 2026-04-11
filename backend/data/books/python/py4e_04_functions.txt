@@ -1,6 +1,6 @@
 TRACK: Python Foundations
 CHAPTER: Functions
-DIFFICULTY: beginner
+DIFFICULTY: intermediate
 SOURCE: Python for Everybody (Charles R. Severance, University of Michigan) | Coursera: https://www.coursera.org/specializations/python | Text: https://www.py4e.com/html3/
 URL: https://www.py4e.com/html3/04-functions.php
 ---

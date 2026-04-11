@@ -250,6 +250,40 @@ export const syllabusApi = {
   },
 }
 
+export interface Py4eSubLesson {
+  id: string
+  title: string
+}
+
+export interface Py4eChapterOutline {
+  key: string
+  track_id: string
+  number: number
+  title: string
+  difficulty: string
+  topics: string[]
+  sub_lessons: Py4eSubLesson[]
+}
+
+export interface Py4eCurriculumPayload {
+  source: string
+  tracks: {
+    id: string
+    label_en: string
+    label_ar: string
+    goal_ar: string
+    chapter_keys: string[]
+  }[]
+  chapters: Record<string, Py4eChapterOutline>
+}
+
+export const curriculumApi = {
+  async getPy4e() {
+    const res = await api.get<Py4eCurriculumPayload>('/curriculum/py4e')
+    return res.data
+  },
+}
+
 // Lessons content (from backend / seed_content)
 export interface LessonContentResponse {
   found: boolean
@@ -259,6 +293,7 @@ export interface LessonContentResponse {
 }
 
 export type LessonSection =
+  | { type: 'markdown'; content: string }
   | { type: 'introduction'; content: string }
   | { type: 'explanation'; title?: string; content: string; subsections?: any[] }
   | { type: 'code_example'; title?: string; code: string; explanation?: string }

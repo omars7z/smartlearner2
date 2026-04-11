@@ -1,6 +1,6 @@
 TRACK: Python Foundations
 CHAPTER: Regular Expressions
-DIFFICULTY: intermediate
+DIFFICULTY: advanced
 SOURCE: Python for Everybody (Charles R. Severance, University of Michigan) | Coursera: https://www.coursera.org/specializations/python | Text: https://www.py4e.com/html3/
 URL: https://www.py4e.com/html3/11-regex.php
 ---

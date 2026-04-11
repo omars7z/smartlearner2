@@ -1,0 +1,31 @@
+{
+  "title": "Placement MCQ prompt / item quality (PY4E scope)",
+  "scale_max": 5,
+  "criteria": [
+    {
+      "id": "objective_fit",
+      "name": "Objective fit",
+      "description": "Each question clearly tests its rubric concept for this level; stem and correct answer align with that skill, not unrelated trivia."
+    },
+    {
+      "id": "understanding_vs_trivia",
+      "name": "Understanding vs trivia",
+      "description": "Questions reward conceptual understanding (predict output, choose behavior, fix logic) rather than memorizing obscure facts."
+    },
+    {
+      "id": "clarity_and_fairness",
+      "name": "Clarity and fairness",
+      "description": "Stem is unambiguous at this level; distractors are plausible but not misleading due to sloppy wording."
+    },
+    {
+      "id": "py4e_scope",
+      "name": "PY4E / foundations scope",
+      "description": "Content fits Python for Everybody-style foundations; no off-scope advanced frameworks unless appropriate for the placement level."
+    },
+    {
+      "id": "set_coherence",
+      "name": "Set coherence",
+      "description": "The five questions feel like a coherent block for one tier: difficulty is consistent and slots are not repetitive."
+    }
+  ]
+}

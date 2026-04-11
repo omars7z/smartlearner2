@@ -25,6 +25,81 @@ class Chunk:
   metadata: Dict[str, Any]
 
 
+def _needle_variants(title: str) -> List[str]:
+  """Try a few phrasings so scraped HTML text still matches TOC titles."""
+  t = title.strip()
+  seen: set[str] = set()
+  out: List[str] = []
+  for cand in (
+    t,
+    t.split("(", 1)[0].strip(),
+    t.split(":", 1)[-1].strip() if ":" in t else "",
+    t.split(":", 1)[0].strip() if ":" in t else "",
+    t.replace("—", "-"),
+    t.replace(" / ", " "),
+  ):
+    if cand and len(cand) >= 4 and cand.lower() not in seen:
+      seen.add(cand.lower())
+      out.append(cand)
+  return out
+
+
+def _build_sublesson_anchors(full_text: str, sub_lessons: List[Dict[str, str]]) -> List[tuple[int, str, str]]:
+  """
+  Map each TOC sub-lesson to a start word index in `full_text` (single-space normalized).
+  Scans in TOC order; each match must occur after the previous match (avoids re-using
+  generic headings like 'Debugging' from an earlier section).
+  """
+  if not full_text or not sub_lessons:
+    return []
+  fl = full_text.lower()
+  anchors: List[tuple[int, str, str]] = []
+  last_char = -1
+  for sl in sub_lessons:
+    sid = str(sl.get("id") or "").strip()
+    title = str(sl.get("title") or "").strip()
+    if not sid or not title:
+      continue
+    best_pos = -1
+    for needle in _needle_variants(title):
+      p = fl.find(needle.lower(), last_char + 1)
+      if p >= 0 and (best_pos < 0 or p < best_pos):
+        best_pos = p
+    if best_pos < 0:
+      continue
+    prefix = full_text[:best_pos]
+    word_index = len(prefix.split()) if prefix.strip() else 0
+    anchors.append((word_index, sid, title))
+    last_char = best_pos
+  anchors.sort(key=lambda x: x[0])
+  deduped: List[tuple[int, str, str]] = []
+  for a in anchors:
+    if deduped and deduped[-1][0] == a[0]:
+      continue
+    deduped.append(a)
+  return deduped
+
+
+def _sublesson_for_word_index(
+  anchors: List[tuple[int, str, str]],
+  word_index: int,
+  sub_lessons: List[Dict[str, str]],
+) -> tuple[str, str]:
+  if not sub_lessons:
+    return "", ""
+  if not anchors:
+    return "", ""
+  if word_index < anchors[0][0]:
+    return "preface", "Chapter opening"
+  sid_out, title_out = anchors[0][1], anchors[0][2]
+  for wi, sid, title in anchors:
+    if wi <= word_index:
+      sid_out, title_out = sid, title
+    else:
+      break
+  return sid_out, title_out
+
+
 class BookChunker:
   """
   Chunk educational books into smaller passages for RAG ingestion.
@@ -53,12 +128,12 @@ class BookChunker:
         },
         "py4e_04_functions": {
           "title": "Functions",
-          "difficulty": "beginner",
+          "difficulty": "intermediate",
           "topics": ["functions"],
         },
         "py4e_05_iterations": {
           "title": "Iterations",
-          "difficulty": "beginner",
+          "difficulty": "intermediate",
           "topics": ["control_flow"],
         },
         "py4e_06_strings": {
@@ -88,7 +163,7 @@ class BookChunker:
         },
         "py4e_11_regex": {
           "title": "Regular Expressions",
-          "difficulty": "intermediate",
+          "difficulty": "advanced",
           "topics": ["regex"],
         },
         "py4e_12_network": {
@@ -108,12 +183,12 @@ class BookChunker:
         },
         "py4e_15_database": {
           "title": "Python and Databases",
-          "difficulty": "advanced",
+          "difficulty": "very_advanced",
           "topics": ["databases"],
         },
         "py4e_16_viz": {
           "title": "Data Visualization",
-          "difficulty": "advanced",
+          "difficulty": "very_advanced",
           "topics": ["visualization"],
         },
       },
@@ -167,11 +242,21 @@ class BookChunker:
     chapter_title: str,
     target_words: int = 180,
     overlap_words: int = 30,
+    *,
+    chapter_key: str | None = None,
+    sub_lessons: List[Dict[str, str]] | None = None,
   ) -> List[Chunk]:
     """
-    Very simple word-based chunker with overlap.
+    Word-based chunker with overlap. Optionally tags each chunk with PY4E sub-lesson
+    (TOC) metadata by locating subsection titles in normalized chapter text.
     """
     words = text.split()
+    full_text = " ".join(words)
+    anchors: List[tuple[int, str, str]] = []
+    subs = sub_lessons or []
+    if subs and full_text:
+      anchors = _build_sublesson_anchors(full_text, subs)
+
     chunks: List[Chunk] = []
     i = 0
     while i < len(words):
@@ -179,13 +264,20 @@ class BookChunker:
       if not window:
         break
       chunk_text = " ".join(window)
-      meta = {
+      sub_id, sub_title = _sublesson_for_word_index(anchors, i, subs)
+      meta: Dict[str, Any] = {
         "source": source,
         "track": track,
         "topic": topic,
         "difficulty": difficulty,
         "chapter_title": chapter_title,
       }
+      if chapter_key:
+        meta["chapter_key"] = chapter_key
+      if sub_id:
+        meta["sub_lesson_id"] = sub_id
+      if sub_title:
+        meta["sub_lesson_title"] = sub_title
       chunks.append(Chunk(text=chunk_text, metadata=meta))
       i += max(target_words - overlap_words, 1)
     return chunks
@@ -194,6 +286,14 @@ class BookChunker:
 
   def process_book(self, book_key: str) -> int:
     config = self.BOOK_CONFIG[book_key]
+    chapters_cfg: Dict[str, Any] = config["chapters"]
+    if book_key == "python_py4e":
+      try:
+        from app.core.py4e_curriculum import book_chunker_chapter_config
+
+        chapters_cfg = book_chunker_chapter_config()
+      except ImportError:
+        pass
     folder = Path(config["folder"])
     total_chunks = 0
 
@@ -213,13 +313,13 @@ class BookChunker:
       # Detect chapter info from filename
       chapter_key = None
       stem_lower = file_path.stem.lower()
-      for key in config["chapters"]:
+      for key in chapters_cfg:
         if key in stem_lower:
           chapter_key = key
           break
 
       if chapter_key:
-        ch_info = config["chapters"][chapter_key]
+        ch_info = chapters_cfg[chapter_key]
       else:
         ch_info = {
           "title": file_path.stem.replace("_", " ").title(),
@@ -244,6 +344,16 @@ class BookChunker:
 
         primary_topic = ch_info["topics"][0]
 
+        sub_lessons: List[Dict[str, str]] | None = None
+        ck = chapter_key
+        if book_key == "python_py4e" and chapter_key:
+          try:
+            from app.core.py4e_curriculum import sub_lessons_for_chapter
+
+            sub_lessons = sub_lessons_for_chapter(chapter_key)
+          except ImportError:
+            sub_lessons = None
+
         chunks = self.smart_chunk_text(
           text=text,
           source=file_path.stem,
@@ -251,6 +361,8 @@ class BookChunker:
           topic=primary_topic,
           difficulty=ch_info["difficulty"],
           chapter_title=ch_info["title"],
+          chapter_key=ck,
+          sub_lessons=sub_lessons,
         )
 
         self.all_chunks.extend(chunks)

@@ -1,0 +1,17 @@
+{
+  "level": "beginner",
+  "run_validator": true,
+  "run_rubric_eval": false,
+  "variants": [
+    {
+      "id": "baseline",
+      "note": "Default prompts from agents.py. Set run_rubric_eval true or pass --evaluate for LLM rubric scores in the run JSON."
+    },
+    {
+      "id": "example_custom",
+      "note": "Copy this block, set id, and fill system_prompt and/or user_prompt_template",
+      "system_prompt": "Placement MCQ generator for Python for Everybody (University of Michigan) material. Return JSON with one question object only: question (string), choices (array of exactly 4 distinct strings), correct_answer (must equal one of choices), concept (ignored — set to empty string).",
+      "user_prompt_template": "Placement level: {lvl}. RAG context:\n{chunk_text}\n\nRubric objective (must be the skill tested): {rubric_concept}\nQuestion slot {slot} of {question_count} for this level.\nWrite ONE multiple-choice question that assesses this objective using ideas from the context."
+    }
+  ]
+}

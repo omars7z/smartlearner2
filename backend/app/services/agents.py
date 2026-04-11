@@ -2,7 +2,16 @@ import json
 import random
 
 from app.core.config import get_settings
-from app.core.placement_rubric import concepts_for_level, normalize_level
+from app.core.placement_rubric import (
+    PLACEMENT_CONCEPTS_BY_LEVEL,
+    SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL,
+    SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL,
+    SYLLABUS_TOPIC_ORDER_BY_LEVEL,
+    chapter_scope_for_level,
+    concepts_for_level,
+    forbidden_terms_for_level,
+    normalize_level,
+)
 from app.services.guardrails import (
     has_python3_hallucinations,
     safe_json_loads,
@@ -53,6 +62,57 @@ def _extract_question_obj(payload: dict) -> dict | None:
     return None
 
 
+def _syllabus_allowed_topics_ordered(level: str) -> list[str]:
+    """Topics in syllabus order (PY4E-aligned), not alphabetical."""
+    lvl = normalize_level(level)
+    allow = SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL.get(lvl, frozenset())
+    order = SYLLABUS_TOPIC_ORDER_BY_LEVEL.get(lvl)
+    if order:
+        out: list[str] = [t for t in order if t in allow]
+        for t in allow:
+            if t not in out:
+                out.append(t)
+        return out
+    return sorted(allow)
+
+
+def _syllabus_rubric_concepts_for_level(level: str) -> list[str]:
+    lvl = normalize_level(level)
+    return list(SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL.get(lvl, PLACEMENT_CONCEPTS_BY_LEVEL.get(lvl, ())))
+
+
+# Edit these strings to experiment with placement quality; one MCQ per LLM call (per rubric slot).
+PLACEMENT_MCQ_SYSTEM_PROMPT = (
+    "Placement MCQ generator for Python for Everybody (University of Michigan). "
+    "You will receive a rubric_concept in the user message — generate ONE question for THAT concept ONLY. "
+    "Do NOT introduce concepts, syntax, or ideas from other levels or chapters. "
+    "Allowed scope per level: "
+    "beginner = Ch 1-3 and Ch 6 only (variables, expressions, conditionals, strings, basic I/O, errors). "
+    "intermediate = Ch 4-5 and Ch 7-10 (functions, loops, files, lists, dictionaries, tuples). "
+    "advanced = Ch 11-13 (regex, networking, web services, data parsing). "
+    "very_advanced = Ch 14-16 (OOP, databases, visualization). "
+    "Never use self, classes, asyncio, SQL, APIs, or OOP concepts for beginner level. "
+    "Return JSON only: question (string), choices (array of exactly 4 distinct strings), "
+    "correct_answer (must exactly match one of choices), concept (copy rubric_concept verbatim). "
+    "Test conceptual understanding, not memorization or trivia."
+)
+
+# User message template for .format(): lvl, chunk_text, rubric_concept, slot (1-based), question_count
+DEFAULT_PLACEMENT_USER_PROMPT_TEMPLATE = (
+    "Placement level: {lvl}. "
+    "Allowed chapters for this level: beginner=Ch1-3,Ch6 | intermediate=Ch4,5,7,8,9,10 | advanced=Ch11-13 | very_advanced=Ch14-16.\n"
+    "RAG context:\n{chunk_text}\n\n"
+    "Rubric objective (you MUST test THIS concept and ONLY this concept): {rubric_concept}\n"
+    "Question slot {slot} of {question_count}.\n"
+    "Write ONE multiple-choice question that:\n"
+    "- Tests ONLY the rubric objective above\n"
+    "- Uses vocabulary and difficulty appropriate for {lvl} level\n"
+    "- Does NOT introduce concepts from other levels or chapters\n"
+    "- Does NOT repeat wording from other slots\n"
+    "Return JSON only."
+)
+
+
 class PlacementGeneratorAgent(AgentPair):
     """LLM + RAG: MCQs aligned to the placement rubric (Python for Everybody scope)."""
 
@@ -60,13 +120,37 @@ class PlacementGeneratorAgent(AgentPair):
         super().__init__("placement-generator", llm)
         self.rag = rag
 
-    def generate(self, level: str, question_count: int) -> dict:
+    def generate(
+        self,
+        level: str,
+        question_count: int,
+        *,
+        system_prompt: str | None = None,
+        user_prompt_template: str | None = None,
+    ) -> dict:
         lvl = normalize_level(level)
         forced_concepts = concepts_for_level(lvl)
         if question_count != len(forced_concepts):
             raise AgentValidationError(
                 f"Placement expects exactly {len(forced_concepts)} questions per level; got {question_count}."
             )
+
+        sys_prompt = (
+            PLACEMENT_MCQ_SYSTEM_PROMPT
+            if not (isinstance(system_prompt, str) and system_prompt.strip())
+            else system_prompt.strip()
+        )
+        sys_prompt = (
+            sys_prompt
+            + f"\n\nLevel scope: {chapter_scope_for_level(lvl)}."
+            + "\n\nAllowed concepts for this level (one per question slot, in order):\n"
+            + "\n".join(f"{i + 1}. {c}" for i, c in enumerate(forced_concepts))
+        )
+        user_tpl = (
+            DEFAULT_PLACEMENT_USER_PROMPT_TEMPLATE
+            if not (isinstance(user_prompt_template, str) and user_prompt_template.strip())
+            else user_prompt_template.strip()
+        )
 
         all_chunks = self.rag.retrieve_python_basics_context(
             f"python for everybody {lvl} placement diagnostic {forced_concepts[0]}",
@@ -82,24 +166,18 @@ class PlacementGeneratorAgent(AgentPair):
             rubric_concept = forced_concepts[idx]
             chunk = selected_chunks[idx % len(selected_chunks)]
             chunk_text = str(chunk).strip()
+            user_prompt = user_tpl.format(
+                lvl=lvl,
+                chunk_text=chunk_text,
+                rubric_concept=rubric_concept,
+                slot=idx + 1,
+                question_count=question_count,
+            )
             for _ in range(5):
                 payload = self._generate_with_retries(
                     model=self.settings.smart_model,
-                    system_prompt=(
-                        "Placement MCQ generator for Python for Everybody (University of Michigan) material. "
-                        "Return JSON with one question object only: "
-                        "question (string), choices (array of exactly 4 distinct strings), correct_answer "
-                        "(must equal one of choices), concept (ignored — set to empty string). "
-                        "Questions must test understanding, not trivia, and match the rubric objective."
-                    ),
-                    user_prompt=(
-                        f"Placement level: {lvl}. RAG context:\n{chunk_text}\n\n"
-                        f"Rubric objective (must be the skill tested): {rubric_concept}\n"
-                        f"Question slot {idx + 1} of {question_count} for this level.\n"
-                        "Write ONE multiple-choice question that assesses this objective using ideas from the context. "
-                        "Do not repeat wording from other slots. "
-                        "Keep difficulty appropriate for this placement stage."
-                    ),
+                    system_prompt=sys_prompt,
+                    user_prompt=user_prompt,
                 )
                 question_obj = _extract_question_obj(payload)
                 if not question_obj or not isinstance(question_obj, dict):
@@ -159,8 +237,14 @@ def _validate_placement_deterministic(data: dict, level: str, question_count: in
         correct_str = str(correct).strip()
         if correct_str not in norm_choices:
             raise AgentValidationError(f"Question {i + 1}: correct_answer must be one of choices.")
-        if lvl == "beginner" and "asyncio" in text_lower:
-            raise AgentValidationError(f"Question {i + 1}: beginner level must not reference asyncio.")
+
+        forbidden = forbidden_terms_for_level(lvl)
+        for term in forbidden:
+            if term in text_lower:
+                raise AgentValidationError(
+                    f"Question {i + 1}: level {lvl!r} must not reference '{term}'. "
+                    f"Allowed scope: {chapter_scope_for_level(lvl)}."
+                )
 
         normalized.append(
             {
@@ -234,75 +318,426 @@ class PlacementValidatorAgent(AgentPair):
             return _validate_placement_deterministic(data, level, question_count)
 
 
+def _flatten_syllabus_payload(payload: dict) -> list[dict]:
+    """
+    Normalize syllabus JSON: either legacy flat `lessons[]` or hierarchical `units[]`
+    with nested `lessons` (sub-lessons). Each row: topic, title, description, unit_title.
+    """
+    units = payload.get("units")
+    if isinstance(units, list) and units:
+        out: list[dict] = []
+        for u in units:
+            if not isinstance(u, dict):
+                continue
+            ut = str(u.get("title") or u.get("unit_title") or "").strip() or "Unit"
+            summary = str(u.get("summary") or u.get("description") or "").strip()
+            for sl in u.get("lessons") or []:
+                if not isinstance(sl, dict):
+                    continue
+                topic = str(sl.get("topic") or "").strip()
+                if not topic:
+                    continue
+                title = str(sl.get("lesson_title") or sl.get("title") or topic).strip()
+                desc = str(sl.get("description") or "").strip()
+                lo = sl.get("learning_objectives")
+                row = {
+                    "topic": topic,
+                    "title": title,
+                    "description": desc,
+                    "unit_title": ut,
+                    "learning_objectives": lo if isinstance(lo, list) else [],
+                    "rubric_concept": str(sl.get("rubric_concept") or "").strip(),
+                }
+                lit = str(sl.get("lesson_title") or sl.get("title") or "").strip()
+                if lit:
+                    row["lesson_title"] = lit
+                cref = sl.get("chapter_ref")
+                if cref is not None:
+                    try:
+                        row["chapter_ref"] = int(cref)
+                    except (TypeError, ValueError):
+                        row["chapter_ref"] = cref
+                if summary and not desc:
+                    row["description"] = summary
+                out.append(row)
+        return out
+
+    legacy = payload.get("lessons") or []
+    rows: list[dict] = []
+    for lesson in legacy:
+        if not isinstance(lesson, dict):
+            continue
+        topic = str(lesson.get("topic") or "").strip()
+        if not topic:
+            continue
+        lo = lesson.get("learning_objectives")
+        lr = {
+            "topic": topic,
+            "title": str(lesson.get("lesson_title") or lesson.get("title") or topic).strip(),
+            "description": str(lesson.get("description") or "").strip(),
+            "unit_title": str(lesson.get("unit_title") or "").strip() or None,
+            "learning_objectives": lo if isinstance(lo, list) else [],
+            "rubric_concept": str(lesson.get("rubric_concept") or "").strip(),
+        }
+        cref = lesson.get("chapter_ref")
+        if cref is not None:
+            try:
+                lr["chapter_ref"] = int(cref)
+            except (TypeError, ValueError):
+                lr["chapter_ref"] = cref
+        rows.append(lr)
+    return rows
+
+
+def _chapter_structure_hint(level: str) -> str:
+    """PY4E chapter breakdown injected into the syllabus generation prompt."""
+    hints = {
+        "beginner": (
+            "Ch 1 – Why we program: What is programming, Hardware architecture, "
+            "Python as a language, Writing your first program\n"
+            "Ch 2 – Variables, expressions, statements: Values and types, "
+            "Variables and assignment, Expressions and operators, "
+            "Statements and order of execution, User input\n"
+            "Ch 3 – Conditional execution: Boolean expressions, Logical operators, "
+            "if/elif/else, Nested conditionals, try/except basics\n"
+            "Ch 6 – Strings: String operations, String slicing, "
+            "String methods, Searching in strings, String formatting"
+        ),
+        "intermediate": (
+            "Ch 4 – Functions: Defining functions, Parameters and arguments, "
+            "Return values, Local vs global scope, Fruitful functions\n"
+            "Ch 5 – Iteration: while loop, for loop, "
+            "Loop patterns (counting/summing/min/max), break and continue, "
+            "Infinite loops and guards\n"
+            "Ch 7 – Files: Opening and reading files, Writing to files, "
+            "File paths, Looping over file lines, try/except with files\n"
+            "Ch 8 – Lists: List operations, List methods, List slicing, "
+            "Lists and loops, List algorithms\n"
+            "Ch 9 – Dictionaries: Dictionary basics, Looping over dictionaries, "
+            "Dictionary patterns (counting/grouping), get() and default values\n"
+            "Ch 10 – Tuples: Tuple basics, Tuples vs lists, "
+            "Sorting with tuples, DSU pattern, Tuples in loops"
+        ),
+        "advanced": (
+            "Ch 11 – Regular Expressions: re module basics, search() and findall(), "
+            "Character classes and quantifiers, Greedy vs non-greedy, "
+            "Practical regex patterns\n"
+            "Ch 12 – Networked Programs: HTTP basics, urllib and urlopen, "
+            "Parsing HTML, Web scraping patterns, Error handling in networking\n"
+            "Ch 13 – Web Services: JSON basics, Parsing JSON, "
+            "REST APIs and requests, XML basics, Service-Oriented Architecture\n"
+            "Ch 14 – OOP: Classes and objects, __init__ and self, "
+            "Methods, Inheritance, OOP design patterns"
+        ),
+        "very_advanced": (
+            "Ch 15 – Databases & SQL: SQLite basics, CREATE/INSERT/SELECT, "
+            "Filtering and sorting, Joins and relationships, "
+            "Python + SQLite integration\n"
+            "Ch 16 – Visualizing Data: Data visualization concepts, "
+            "OpenStreetMap data, Network graphs, "
+            "Mail data analysis, End-to-end data pipeline"
+        ),
+    }
+    return hints.get(normalize_level(level), hints["beginner"])
+
+
 class SyllabusGeneratorAgent(AgentPair):
-    def __init__(self, llm: LLMClient):
+    """LLM + RAG: generates a personalized syllabus aligned to placement level and PY4E rubric."""
+
+    name = "syllabus-generator"
+
+    def __init__(self, llm: LLMClient, rag: RAGService):
         super().__init__("syllabus-generator", llm)
+        self.rag = rag
 
-    def generate(self, score: int, level: str) -> dict:
-        from app.core.placement_rubric import SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL, normalize_level
-
+    def generate(
+        self,
+        score: int,
+        level: str,
+        weak_topics: list[str] | None = None,
+        strong_topics: list[str] | None = None,
+    ) -> dict:
         lvl = normalize_level(level)
-        allowed = sorted(SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL.get(lvl, frozenset()))
-        allowed_txt = ", ".join(allowed) if allowed else "(choose standard Python foundations topics)"
+        allowed_topics = _syllabus_allowed_topics_ordered(lvl)
+        rubric_concepts = _syllabus_rubric_concepts_for_level(lvl)
+        scope = chapter_scope_for_level(lvl)
+
+        rag_query = f"python for everybody {lvl} " + " ".join(allowed_topics)
+        rag_chunks = self.rag.retrieve_python_basics_context(rag_query, k=12)
+        rag_context = "\n\n".join(str(c).strip() for c in rag_chunks) if rag_chunks else ""
+
+        if not rag_context:
+            raise AgentValidationError("No RAG context available for syllabus generation.")
+
+        weak = [str(t).strip() for t in (weak_topics or []) if str(t).strip()]
+        strong = [str(t).strip() for t in (strong_topics or []) if str(t).strip()]
+
+        personalization_block = ""
+        if weak:
+            personalization_block += (
+                f"\nSTUDENT WEAK CONCEPTS (prioritize and expand coverage for these):\n"
+                + "\n".join(f"- {t}" for t in weak)
+            )
+        if strong:
+            personalization_block += (
+                f"\nSTUDENT STRONG CONCEPTS (student already knows these — keep coverage brief):\n"
+                + "\n".join(f"- {t}" for t in strong)
+            )
+
+        allowed_txt = "\n".join(f"- {t}" for t in allowed_topics)
+        concepts_txt = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(rubric_concepts))
+
         return self._generate_with_retries(
             model=self.settings.smart_model,
             system_prompt=(
-                "Syllabus generator for Python for Everybody (University of Michigan) scope. "
-                "Return JSON with lessons[] array of unique items. "
-                "Each lesson MUST have 'topic' and 'description' fields. "
-                "The 'topic' value must be copied exactly from the allowed list in the user message. "
-                "Never repeat the same topic. Order lessons from foundational to more advanced within this band."
+                "Syllabus generator for Python for Everybody (University of Michigan). "
+                "Generate a personalized syllabus starting ONLY from the student's placement level. "
+                "Do NOT include content from lower levels. "
+                "Return JSON with top-level key \"units\" (array). Do NOT return flat lessons[] only. "
+                "\n\n"
+                "STRUCTURE — mirror the exact PY4E chapter structure: "
+                "Each unit = one PY4E chapter. "
+                "Each unit MUST have: "
+                "\"chapter\" (int — PY4E chapter number e.g. 2); "
+                "\"title\" (string — exact PY4E chapter title e.g. 'Variables, Expressions and Statements'); "
+                "\"summary\" (one sentence: what the learner achieves in this chapter); "
+                "\"lessons\" (array of sub-lessons, MINIMUM 4 per chapter). "
+                "\n\n"
+                "Each sub-lesson MUST have: "
+                "\"topic\" — copied EXACTLY from the allowed topic list (no changes, no paraphrasing); "
+                "\"lesson_title\" — specific and engaging, NOT just the topic name "
+                "(e.g. 'Storing and Naming Values' not 'Variables'); "
+                "\"description\" — 2-3 sentences: concept taught, what learner practices, measurable outcome; "
+                "\"learning_objectives\" — list of 3-5 strings starting with action verbs "
+                "(Identify, Write, Use, Explain, Debug, Apply, Distinguish); "
+                "\"rubric_concept\" — exact match from the rubric_concepts list provided; "
+                "\"chapter_ref\" (int — the PY4E chapter number this sub-lesson belongs to). "
+                "\n\n"
+                "COMPREHENSIVENESS RULES: "
+                "Minimum 4 sub-lessons per chapter — if a chapter has more major concepts, add more. "
+                "Every description must be grounded in the RAG context provided — no generic filler. "
+                "learning_objectives must reflect what a student at THIS level genuinely needs to master. "
+                "Each chapter unit must feel self-contained so a student can finish it and move on confidently. "
+                "\n\n"
+                "ORDER RULES: "
+                "Units must appear in ascending chapter number order. "
+                "Within Ch 2, sub-lesson for 'Expressions' must come before 'Variable Assignment'. "
+                "\n\n"
+                "STRICT SCOPE: "
+                "Generate ONLY content from the allowed chapters for this level. "
+                "Do NOT introduce any topic, syntax, or concept from other levels or chapters. "
+                "rubric_concept must exactly match one entry from the rubric_concepts list — do not invent."
+                "\n\n"
+                "PERSONALIZATION RULES: "
+                "You will receive STUDENT WEAK CONCEPTS and STUDENT STRONG CONCEPTS in the user message. "
+                "For weak concepts: add more sub-lessons, more detailed descriptions, "
+                "and more learning_objectives focused on that concept. "
+                "For strong concepts: keep coverage concise — one sub-lesson is enough, "
+                "shorter description, fewer objectives. "
+                "Never skip a required topic — just adjust depth. "
             ),
             user_prompt=(
-                f"Placement level: {lvl}. Score index: {score}. "
-                f"Allowed lesson topic strings (use each at most once, pick a subset that fits the learner): {allowed_txt}. "
-                "Ensure each topic appears only once."
+                f"Student placement level: {lvl}.\n"
+                f"STRICT SCOPE: generate syllabus for {lvl} level ONLY — do not include any other level.\n"
+                f"Allowed chapters: {scope}.\n\n"
+                f"PY4E chapter structure for {lvl} (use as backbone — one unit per chapter):\n"
+                + _chapter_structure_hint(lvl)
+                + f"\n\nAllowed topic strings (copy EXACTLY, use every one exactly once across all units):\n{allowed_txt}\n\n"
+                f"Rubric concepts in order (map each sub-lesson to its closest matching concept):\n{concepts_txt}\n\n"
+                f"RAG context (ground all descriptions and objectives here):\n{rag_context}\n\n"
+                f"{personalization_block}\n\n"
+                f"Score index: {score}.\n"
+                "Return full syllabus JSON now. "
+                "Minimum 4 sub-lessons per chapter. "
+                "Every sub-lesson must have: topic, lesson_title, description, learning_objectives, rubric_concept, chapter_ref."
             ),
         )
 
 
-class SyllabusValidatorAgent:
+_SYLLABUS_VALIDATOR_SYSTEM = """You are SyllabusValidatorAgent for Python for Everybody.
+You receive JSON with:
+- placement_level (string)
+- chapter_scope (string)
+- allowed_chapters (object: chapter number → chapter title)
+- allowed_topics (array of exact allowed topic strings for this level)
+- rubric_concepts (array of exact rubric concept strings for this level)
+- candidate_units (the generated units array)
+
+Validate every unit and sub-lesson:
+1. topic must be copied EXACTLY from allowed_topics — no paraphrasing
+2. lesson_title must NOT equal topic — must be more descriptive
+3. description must be at least 2 sentences specific to the topic
+4. learning_objectives must be a list of at least 3 actionable strings (verb-first)
+5. rubric_concept must exactly match one entry from rubric_concepts
+6. Every topic in allowed_topics appears exactly once — no omissions, no duplicates
+7. No topics from other levels appear
+8. chapter_ref must belong to allowed_chapters keys
+9. Units must be in ascending chapter number order
+10. Within Ch 2: sub-lesson with topic related to 'Expressions' appears before 'Variable Assignment'
+11. Each chapter unit must have at least 4 sub-lessons
+
+Return JSON only:
+{"valid": true, "units": [ ...normalized units array unchanged... ]}
+or {"valid": false, "error": "which lesson/unit failed and which rule number"}.
+If valid, echo the full units array unchanged."""
+
+
+def _validate_syllabus_deterministic(payload: dict, placement_level: str | None) -> dict:
+    """Deterministic fallback — mirrors _validate_placement_deterministic pattern."""
+    from app.core.placement_rubric import validate_syllabus_topics_for_level
+
+    flat = _flatten_syllabus_payload(payload)
+    if not flat:
+        raise AgentValidationError(
+            "Syllabus must contain units with lessons, or a non-empty lessons array."
+        )
+
+    seen_topics: set[str] = set()
+    unique_lessons: list[dict] = []
+    for lesson in flat:
+        topic = lesson.get("topic", "")
+        if topic and topic not in seen_topics:
+            seen_topics.add(topic)
+            unique_lessons.append(lesson)
+
+    if placement_level:
+        try:
+            validate_syllabus_topics_for_level(unique_lessons, placement_level)
+        except ValueError as exc:
+            raise AgentValidationError(str(exc)) from exc
+
+    if placement_level:
+        lvl = normalize_level(placement_level)
+        allowed_concepts = set(
+            SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL.get(lvl, PLACEMENT_CONCEPTS_BY_LEVEL.get(lvl, ()))
+        )
+        for i, lesson in enumerate(unique_lessons):
+            rc = str(lesson.get("rubric_concept") or "").strip()
+            if rc and rc not in allowed_concepts:
+                raise AgentValidationError(
+                    f"Lesson {i + 1} ({lesson.get('topic')}): "
+                    f"rubric_concept {rc!r} is not valid for level {lvl!r}."
+                )
+
+        ALLOWED_CHAPTER_NUMBERS = {
+            "beginner": {1, 2, 3, 6},
+            "intermediate": {4, 5, 7, 8, 9, 10},
+            "advanced": {11, 12, 13, 14},
+            "very_advanced": {15, 16},
+        }
+        lvl_ch = normalize_level(placement_level)
+        allowed_ch = ALLOWED_CHAPTER_NUMBERS.get(lvl_ch, set())
+        for i, lesson in enumerate(unique_lessons):
+            ch_ref = lesson.get("chapter_ref")
+            if ch_ref is not None:
+                try:
+                    if int(ch_ref) not in allowed_ch:
+                        raise AgentValidationError(
+                            f"Lesson {i + 1} ({lesson.get('topic')}): "
+                            f"chapter_ref {ch_ref} is outside allowed chapters "
+                            f"for level {lvl_ch!r}: {sorted(allowed_ch)}"
+                        )
+                except (TypeError, ValueError):
+                    pass
+
+    for i, lesson in enumerate(unique_lessons):
+        desc = str(lesson.get("description") or "").strip()
+        if len(desc) < 30:
+            raise AgentValidationError(
+                f"Lesson {i + 1} ({lesson.get('topic')}): description too short or missing."
+            )
+        objectives = lesson.get("learning_objectives")
+        if not isinstance(objectives, list) or len(objectives) < 3:
+            raise AgentValidationError(
+                f"Lesson {i + 1} ({lesson.get('topic')}): "
+                "learning_objectives must be a list of at least 3 items."
+            )
+        title = str(lesson.get("lesson_title") or lesson.get("title") or "").strip()
+        topic = str(lesson.get("topic") or "").strip()
+        if title.lower() == topic.lower():
+            raise AgentValidationError(
+                f"Lesson {i + 1}: lesson_title must differ from topic name."
+            )
+
+    topics = [lesson.get("topic", "") for lesson in unique_lessons]
+    if "Variable Assignment" in topics and "Expressions" in topics:
+        i_exp = next(i for i, l in enumerate(unique_lessons) if l.get("topic") == "Expressions")
+        i_var = next(i for i, l in enumerate(unique_lessons) if l.get("topic") == "Variable Assignment")
+        if i_exp > i_var:
+            exp_lesson = unique_lessons.pop(i_exp)
+            i_var = next(i for i, l in enumerate(unique_lessons) if l.get("topic") == "Variable Assignment")
+            unique_lessons.insert(i_var, exp_lesson)
+
+    topics = [lesson.get("topic", "") for lesson in unique_lessons]
+    if len(set(topics)) != len(topics):
+        raise AgentValidationError("Syllabus contains duplicate topics.")
+
+    return {"lessons": unique_lessons, "units": payload.get("units")}
+
+
+class SyllabusValidatorAgent(AgentPair):
+    """LLM-assisted syllabus validation with deterministic fallback."""
+
     name = "syllabus-validator"
 
+    def __init__(self, llm: LLMClient):
+        super().__init__("syllabus-validator", llm)
+
     def validate(self, payload: dict, placement_level: str | None = None) -> dict:
-        from app.core.placement_rubric import validate_syllabus_topics_for_level
+        lvl = normalize_level(placement_level) if placement_level else "beginner"
+        allowed_topics = _syllabus_allowed_topics_ordered(lvl)
+        rubric_concepts = _syllabus_rubric_concepts_for_level(lvl)
 
-        lessons = payload.get("lessons", [])
-        if not isinstance(lessons, list) or not lessons:
-            raise AgentValidationError("Syllabus must contain a non-empty lessons array.")
+        ALLOWED_CHAPTERS = {
+            "beginner": {
+                1: "Why we program",
+                2: "Variables, Expressions and Statements",
+                3: "Conditional execution",
+                6: "Strings",
+            },
+            "intermediate": {
+                4: "Functions",
+                5: "Iteration",
+                7: "Files",
+                8: "Lists",
+                9: "Dictionaries",
+                10: "Tuples",
+            },
+            "advanced": {
+                11: "Regular Expressions",
+                12: "Networked Programs",
+                13: "Web Services",
+                14: "Object-Oriented Programming",
+            },
+            "very_advanced": {
+                15: "Databases and SQL",
+                16: "Visualizing Data",
+            },
+        }
 
-        seen_topics: set[str] = set()
-        unique_lessons: list[dict] = []
-        for lesson in lessons:
-            if not isinstance(lesson, dict):
-                continue
-            topic = lesson.get("topic", "")
-            if topic and topic not in seen_topics:
-                seen_topics.add(topic)
-                unique_lessons.append(lesson)
+        validation_input = {
+            "placement_level": lvl,
+            "chapter_scope": chapter_scope_for_level(lvl),
+            "allowed_chapters": ALLOWED_CHAPTERS.get(lvl, {}),
+            "allowed_topics": allowed_topics,
+            "rubric_concepts": rubric_concepts,
+            "candidate_units": payload.get("units") or [],
+        }
 
-        out = {**payload, "lessons": unique_lessons}
-        topics = [lesson.get("topic", "") for lesson in unique_lessons]
-
-        if placement_level:
-            try:
-                validate_syllabus_topics_for_level(unique_lessons, placement_level)
-            except ValueError as exc:
-                raise AgentValidationError(str(exc)) from exc
-
-        if "Variable Assignment" in topics and "Expressions" in topics:
-            i_exp = next(i for i, l in enumerate(unique_lessons) if l.get("topic") == "Expressions")
-            i_var = next(i for i, l in enumerate(unique_lessons) if l.get("topic") == "Variable Assignment")
-            if i_exp > i_var:
-                exp_lesson = unique_lessons.pop(i_exp)
-                i_var = next(i for i, l in enumerate(unique_lessons) if l.get("topic") == "Variable Assignment")
-                unique_lessons.insert(i_var, exp_lesson)
-                topics = [lesson.get("topic", "") for lesson in unique_lessons]
-
-        if len(set(topics)) != len(topics):
-            raise AgentValidationError("Syllabus contains circular/duplicate dependencies.")
-
-        return out
+        try:
+            out = self._generate_with_retries(
+                model=self.settings.fast_model,
+                system_prompt=_SYLLABUS_VALIDATOR_SYSTEM,
+                user_prompt=json.dumps(validation_input, ensure_ascii=False),
+            )
+            if not isinstance(out, dict) or not out.get("valid"):
+                raise AgentValidationError(
+                    str(out.get("error") or "SyllabusValidatorAgent rejected the syllabus")
+                )
+            merged = {"units": out.get("units") or [], "lessons": payload.get("lessons")}
+            return _validate_syllabus_deterministic(merged, placement_level)
+        except AgentValidationError:
+            return _validate_syllabus_deterministic(payload, placement_level)
 
 
 class LessonGeneratorAgent(AgentPair):
@@ -310,23 +745,49 @@ class LessonGeneratorAgent(AgentPair):
         super().__init__("lesson-generator", llm)
         self.rag = rag
 
-    def generate(self, topic: str) -> dict:
-        context = self.rag.retrieve_python_basics_context(topic, k=5)
+    def generate(
+        self,
+        topic: str,
+        lesson_title: str | None = None,
+        *,
+        level: str = "beginner",
+        chapter_ref: int | None = None,
+    ) -> dict:
+        context = self.rag.retrieve_python_basics_context(topic, k=8)
         sanitized_topic = sanitize_prompt(topic)
+        display_title = sanitize_prompt(lesson_title) if lesson_title else sanitized_topic
+        scope_bits: list[str] = [
+            f"Lesson display title: {display_title}",
+            f"Rubric / search topic (slug): {sanitized_topic}",
+            f"Target learner level: {level}",
+        ]
+        if chapter_ref is not None:
+            scope_bits.append(f"Py4E chapter reference (for grounding): chapter {chapter_ref}")
+        user_head = "\n".join(scope_bits)
         payload = self._generate_with_retries(
             model=self.settings.smart_model,
             system_prompt=(
                 "Lesson generator for Python for Everybody (Charles Severance, University of Michigan), "
-                "the open materials used in the Coursera Python specialization. "
-                "Return JSON with 'markdown' field as the sole content. "
-                "The lesson MUST cite 'Python for Everybody' explicitly. "
-                "Base your explanation on the provided course-text context. "
-                "Include relevant Python concepts like expressions, data types, variable assignment, "
-                "or string replication where applicable."
+                "Coursera specialization scope. "
+                "Return JSON with a single key \"markdown\" (string). "
+                "Write a substantive lesson (aim for roughly 600–1200 words unless the model limit requires shorter). "
+                "Use GitHub-flavored Markdown only: "
+                "## and ### headings, **bold** key terms, bullet lists, numbered steps where useful, "
+                "and at least two fenced ```python``` code blocks with runnable examples and brief comments. "
+                "Structure the markdown in this order: "
+                "## Learning objectives (3–5 bullets); "
+                "## Core ideas (clear explanations tied to PY4E); "
+                "## Worked examples (code + explanation); "
+                "## Common pitfalls (short bullets); "
+                "## Practice (2–3 exercises described in text); "
+                "## Summary (bullets). "
+                "The prose MUST cite 'Python for Everybody' at least once. "
+                "Ground explanations in the provided course-text context when relevant."
             ),
             user_prompt=(
-                f"Topic: {sanitized_topic}\n\nCourse text context:\n{context}\n\n"
-                "Generate a comprehensive lesson on this topic aligned with Python for Everybody."
+                f"{user_head}\n\n"
+                f"Course text context (RAG):\n{context}\n\n"
+                "Generate the full markdown lesson. Do not leave headings empty."
             ),
         )
         return payload
@@ -358,7 +819,7 @@ class QAGeneratorAgent(AgentPair):
         "Respond ONLY with valid JSON: "
         '{"answer": "<markdown or plain text>"}. '
         "Use the provided RAG context as primary evidence; explain Python topics those chunks support. "
-        "Do not assume the learner is locked to one sub-topic unless the question or context clearly implies it. "
+        "Stay within the scope of the provided RAG context and lesson topic. Do not introduce concepts beyond what the context covers. "
         "The answer field MUST contain the exact substring: Python for Everybody."
     )
 

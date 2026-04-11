@@ -46,6 +46,12 @@ Thumbs.db
 .coverage
 htmlcov/
 
+# Prompt experiment outputs (keep manifest.json; ignore saved runs)
+backend/experiments/placement_prompts/runs/
+
 # Misc
 *.bak
 ~$*
+
+# Local duplicate tree (not the repo root layout; edit backend/ and frontend/ only)
+smartlearner2/

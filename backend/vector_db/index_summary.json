@@ -1,30 +1,24 @@
 {
-  "total_chunks": 1043,
+  "total_chunks": 419,
   "by_topic": {
-    "python_basics": 34,
-    "control_flow": 58,
-    "functions": 42,
-    "lists": 67,
-    "dictionaries": 32,
-    "strings": 61,
-    "regex": 57,
-    "input_validation": 26,
-    "file_io": 63,
-    "filesystem": 39,
-    "debugging": 39,
-    "web_scraping": 68,
-    "ch13_excel": 55,
-    "ch14_sheets": 34,
-    "ch15_sqlite": 48,
-    "ch16_pdf": 39,
-    "ch17_csv": 58,
-    "ch18_time": 71,
-    "ch19_email": 52,
-    "ch20_images": 71,
-    "introduction": 29
+    "introduction": 46,
+    "python_basics": 24,
+    "control_flow": 40,
+    "functions": 24,
+    "strings": 19,
+    "file_io": 24,
+    "lists": 32,
+    "dictionaries": 23,
+    "tuples": 21,
+    "regex": 29,
+    "networking": 27,
+    "web_services": 14,
+    "oop": 26,
+    "databases": 49,
+    "visualization": 21
   },
   "by_track": {
-    "Python Foundations": 1043
+    "Python Foundations": 419
   },
   "embed_model": "all-MiniLM-L6-v2"
 }

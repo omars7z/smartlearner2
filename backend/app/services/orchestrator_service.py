@@ -1,4 +1,6 @@
 import json
+import re
+from itertools import groupby
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
@@ -28,6 +30,12 @@ from app.core.placement_rubric import (
     QUESTIONS_PER_LEVEL,
     normalize_level,
 )
+
+
+def _topic_slug(topic: str) -> str:
+    """Stable slug for Lesson.topic (search / RAG key)."""
+    s = (topic or "").lower().strip()
+    return re.sub(r"[^a-z0-9]+", "_", s).strip("_") or "topic"
 
 
 def _placement_answer_matches(selected, correct) -> bool:
@@ -93,8 +101,8 @@ class OrchestratorService:
 
         self.placement_generator = PlacementGeneratorAgent(self.llm, self.rag)
         self.placement_validator = PlacementValidatorAgent(self.llm_validators)
-        self.syllabus_generator = SyllabusGeneratorAgent(self.llm)
-        self.syllabus_validator = SyllabusValidatorAgent()
+        self.syllabus_generator = SyllabusGeneratorAgent(self.llm, self.rag)
+        self.syllabus_validator = SyllabusValidatorAgent(self.llm_validators)
         self.lesson_generator = LessonGeneratorAgent(self.llm, self.rag)
         self.lesson_validator = LessonValidatorAgent()
         self.qa_generator = QAGeneratorAgent(self.llm, self.rag)
@@ -410,11 +418,32 @@ class OrchestratorService:
             level_str = normalize_level(str(fl))
         else:
             level_str = _score_to_level(int(score) if score is not None else 0)
-        raw_syllabus = self.syllabus_generator.generate(score=int(score) if score is not None else 0, level=level_str)
+
+        weak_topics: list[str] = []
+        strong_topics: list[str] = []
+        if isinstance(sess, dict):
+            raw_weak = sess.get("wrong_concepts") or []
+            raw_strong = sess.get("strong_concepts") or []
+            weak_topics = list(dict.fromkeys(str(t).strip() for t in raw_weak if str(t).strip()))
+            strong_topics = list(dict.fromkeys(str(t).strip() for t in raw_strong if str(t).strip()))
+
+        raw_syllabus = self.syllabus_generator.generate(
+            score=int(score) if score is not None else 0,
+            level=level_str,
+            weak_topics=weak_topics,
+            strong_topics=strong_topics,
+        )
         await self.agent_repo.log_run(
             agent_name=self.syllabus_generator.name,
             stage="generate",
-            input_json={"placement_id": placement_id, "score": score, "level": level_str, "course_title": course_title},
+            input_json={
+                "placement_id": placement_id,
+                "score": score,
+                "level": level_str,
+                "course_title": course_title,
+                "weak_topics": weak_topics,
+                "strong_topics": strong_topics,
+            },
             output_json=raw_syllabus,
             is_valid=True,
             user_id=user_id,
@@ -441,52 +470,70 @@ class OrchestratorService:
         )
 
         # Transform lessons from syllabus format to CourseRepository format
-        # Syllabus returns: {"topic": str, "description": str}
-        # CourseRepository expects: {"title": str, "topic": str, "prerequisites": [], "markdown_content": str}
         transformed_lessons = []
-        for idx, lesson in enumerate(generated.get("lessons", []), start=1):
+        for lesson in generated.get("lessons", []):
+            rubric_topic = str(lesson.get("topic") or "").strip()
+            display_title = str(lesson.get("title") or rubric_topic).strip()
+            ch_ref = lesson.get("chapter_ref")
             transformed_lessons.append({
-                "title": lesson.get("topic", ""),
-                "topic": lesson.get("topic", "").lower().replace(" ", "_"),
+                "title": display_title,
+                "topic": _topic_slug(rubric_topic),
                 "prerequisites": lesson.get("prerequisites", []),
-                "markdown_content": lesson.get("description", ""),
+                "markdown_content": str(lesson.get("description") or ""),
+                "unit_title": (str(lesson.get("unit_title")).strip() if lesson.get("unit_title") else None),
+                "metadata_json": {"chapter_ref": int(ch_ref)} if ch_ref is not None else {},
             })
-        
+
         course = await self.course_repo.create_course_with_lessons(
             user_id=user_id,
             title=course_title,
             level=level_str.replace("_", " ").title(),
             lessons=transformed_lessons,
         )
-        
-        # Refresh the course with lessons loaded
+
         course = await self.course_repo.get_course_with_lessons(course.id)
         if course is None:
             raise ValueError("Failed to retrieve created course with lessons")
-        
-        # Transform to frontend ModuleDto format with embedded lessons
-        # Each lesson becomes a module with one lesson inside
-        modules = []
-        for idx, lesson in enumerate(course.lessons, start=1):
+
+        sorted_lessons = sorted(course.lessons, key=lambda L: L.order_index)
+        modules: list[dict] = []
+        mod_idx = 0
+
+        def _module_key(les) -> str:
+            ut = (les.unit_title or "").strip()
+            return ut or "__single__"
+
+        for unit_label, group in groupby(sorted_lessons, key=_module_key):
+            rows = list(group)
+            mod_idx += 1
+            unit_title = rows[0].unit_title if rows[0].unit_title else None
+            if unit_label == "__single__" and len(sorted_lessons) == len(rows):
+                mod_title = course.title
+                mod_desc = f"{level_str.replace('_', ' ').title()} track — Python for Everybody scope."
+            else:
+                mod_title = unit_title or f"Module {mod_idx}"
+                mod_desc = f"Unit in {course.title}."
+
             modules.append({
-                "id": f"module_{idx}",
-                "module_id": f"module_{idx}",
-                "title": lesson.topic.replace("_", " ").title(),
-                "description": f"Learn about {lesson.topic.replace('_', ' ').lower()}",
-                "topics": [lesson.topic],
-                "duration": "20 min",
+                "id": f"module_{mod_idx}",
+                "module_id": f"module_{mod_idx}",
+                "title": mod_title,
+                "description": mod_desc,
+                "topics": list({r.topic for r in rows}),
+                "duration": f"{len(rows) * 20} min",
                 "target_level": level_str,
                 "lessons": [
                     {
-                        "lesson_id": f"lesson_{lesson.id}",
-                        "id": f"lesson_{lesson.id}",
-                        "title": lesson.title,
-                        "topic": lesson.topic,
-                        "topic_name": lesson.topic,
+                        "lesson_id": f"lesson_{les.id}",
+                        "id": f"lesson_{les.id}",
+                        "title": les.title,
+                        "topic": les.topic,
+                        "topic_name": les.topic,
                         "duration_minutes": 20,
-                        "order": lesson.order_index,
+                        "order": les.order_index,
                     }
-                ]
+                    for les in rows
+                ],
             })
         
         return {
@@ -506,16 +553,49 @@ class OrchestratorService:
         }
 
     async def generate_lesson_content(self, user_id: int, lesson_id: int) -> dict:
-        from app.models.entities import Lesson
+        from app.models.entities import Course, Lesson
 
         lesson = await self.db.get(Lesson, lesson_id)
         if lesson is None:
             raise ValueError("Lesson not found")
-        raw_lesson = self.lesson_generator.generate(topic=lesson.topic)
+
+        # Get level from parent course
+        level: str = "beginner"
+        chapter_ref: int | None = None
+        try:
+            if lesson.course_id:
+                course = await self.db.get(Course, lesson.course_id)
+                if course and course.level:
+                    raw_level = str(course.level).lower().replace(" ", "_")
+                    level = normalize_level(raw_level)
+        except Exception:
+            pass
+
+        # Get chapter_ref from lesson metadata if available
+        try:
+            meta = lesson.metadata_json if hasattr(lesson, "metadata_json") else None
+            if isinstance(meta, dict):
+                cr = meta.get("chapter_ref")
+                if cr is not None:
+                    chapter_ref = int(cr)
+        except Exception:
+            pass
+
+        raw_lesson = self.lesson_generator.generate(
+            topic=lesson.topic,
+            lesson_title=lesson.title,
+            level=level,
+            chapter_ref=chapter_ref,
+        )
         await self.agent_repo.log_run(
             agent_name=self.lesson_generator.name,
             stage="generate",
-            input_json={"lesson_id": lesson_id, "topic": lesson.topic},
+            input_json={
+                "lesson_id": lesson_id,
+                "topic": lesson.topic,
+                "level": level,
+                "chapter_ref": chapter_ref,
+            },
             output_json=raw_lesson,
             is_valid=True,
             user_id=user_id,
@@ -541,21 +621,17 @@ class OrchestratorService:
             user_id=user_id,
         )
         updated = await self.course_repo.update_lesson_content(lesson.id, generated["markdown"])
-        
-        # Format response matching frontend StructuredLesson interface
+
+        md = (updated.markdown_content or "").strip()
+        if not md:
+            md = f"## {updated.title}\n\n_Content could not be loaded. Try refreshing or regenerating this lesson._"
         return {
             "status": "success",
             "lesson": {
                 "lesson_id": f"lesson_{updated.id}",
                 "title": updated.title,
-                "duration_minutes": 20,
-                "sections": [
-                    {
-                        "type": "explanation",
-                        "title": updated.title,
-                        "content": updated.markdown_content or "",
-                    }
-                ]
+                "duration_minutes": 25,
+                "sections": [{"type": "markdown", "content": md}],
             },
             "generated_in_ms": 0,
             "llm_used": True,

@@ -42,8 +42,10 @@ class CourseRepository:
                     title=lesson["title"],
                     topic=lesson["topic"],
                     order_index=index,
+                    unit_title=lesson.get("unit_title"),
                     prerequisites_json=lesson.get("prerequisites", []),
                     markdown_content=lesson.get("markdown_content"),
+                    metadata_json=lesson.get("metadata_json") or {},
                 )
             )
         await self.db.commit()

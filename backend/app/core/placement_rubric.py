@@ -62,45 +62,336 @@ PLACEMENT_CONCEPTS_BY_LEVEL: dict[str, tuple[str, ...]] = {
 SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL: dict[str, frozenset[str]] = {
     "beginner": frozenset(
         {
-            "Expressions",
+            # Ch 1
+            "What is Programming",
+            "Hardware Architecture",
+            "Python as a Language",
+            "Writing Your First Program",
+            # Ch 2
+            "Values and Types",
             "Variable Assignment",
-            "Conditionals",
-            "Strings",
-            "Debugging and Reading Code",
+            "Expressions",
+            "Statements and Execution Order",
+            "User Input",
+            # Ch 3
+            "Boolean Expressions",
+            "Logical Operators",
+            "if elif else",
+            "Nested Conditionals",
+            "try except Basics",
+            # Ch 6
+            "String Operations",
+            "String Slicing",
+            "String Methods",
+            "Searching in Strings",
+            "String Formatting",
         }
     ),
     "intermediate": frozenset(
         {
-            "Functions",
-            "Loops",
-            "String Methods",
-            "Files",
-            "Lists",
+            # Ch 4
+            "Defining Functions",
+            "Parameters and Arguments",
+            "Return Values",
+            "Local and Global Scope",
+            "Fruitful Functions",
+            # Ch 5
+            "while Loop",
+            "for Loop",
+            "Loop Patterns",
+            "break and continue",
+            "Infinite Loops and Guards",
+            # Ch 7
+            "Opening and Reading Files",
+            "Writing to Files",
+            "File Paths",
+            "Looping Over File Lines",
+            "try except with Files",
+            # Ch 8
+            "List Operations",
+            "List Methods",
+            "List Slicing",
+            "Lists and Loops",
+            "List Algorithms",
+            # Ch 9
+            "Dictionary Basics",
+            "Looping Over Dictionaries",
+            "Dictionary Patterns",
+            "get() and Default Values",
+            # Ch 10
+            "Tuple Basics",
+            "Tuples vs Lists",
+            "Sorting with Tuples",
+            "DSU Pattern",
+            "Tuples in Loops",
         }
     ),
     "advanced": frozenset(
         {
-            "Dictionaries",
-            "Tuples",
-            "Regular Expressions",
-            "Networking",
-            "Data Parsing",
+            # Ch 11
+            "re Module Basics",
+            "search() and findall()",
+            "Character Classes and Quantifiers",
+            "Greedy vs Non-Greedy",
+            "Practical Regex Patterns",
+            # Ch 12
+            "HTTP Basics",
+            "urllib and urlopen",
+            "Parsing HTML",
+            "Web Scraping Patterns",
+            "Error Handling in Networking",
+            # Ch 13
+            "JSON Basics",
+            "Parsing JSON",
+            "REST APIs and Requests",
+            "XML Basics",
+            "Service-Oriented Architecture",
+            # Ch 14
+            "Classes and Objects",
+            "init and self",
+            "Methods",
+            "Inheritance",
+            "OOP Design Patterns",
         }
     ),
     "very_advanced": frozenset(
         {
-            "Web APIs",
-            "Object-Oriented Python",
-            "Databases",
-            "Visualization",
-            "Architecture and Best Practices",
+            # Ch 15
+            "SQLite Basics",
+            "CREATE INSERT SELECT",
+            "Filtering and Sorting",
+            "Joins and Relationships",
+            "Python SQLite Integration",
+            # Ch 16
+            "Data Visualization Concepts",
+            "OpenStreetMap Data",
+            "Network Graphs",
+            "Mail Data Analysis",
+            "End-to-End Data Pipeline",
         }
     ),
 }
 
+# Canonical lesson order in the syllabus UI (must match SYLLABUS_TOPIC_ALLOWLIST for that level).
+SYLLABUS_TOPIC_ORDER_BY_LEVEL: dict[str, tuple[str, ...]] = {
+    "beginner": (
+        "What is Programming",
+        "Hardware Architecture",
+        "Python as a Language",
+        "Writing Your First Program",
+        "Values and Types",
+        "Expressions",
+        "Variable Assignment",
+        "Statements and Execution Order",
+        "User Input",
+        "Boolean Expressions",
+        "Logical Operators",
+        "if elif else",
+        "Nested Conditionals",
+        "try except Basics",
+        "String Operations",
+        "String Slicing",
+        "String Methods",
+        "Searching in Strings",
+        "String Formatting",
+    ),
+    "intermediate": (
+        "Defining Functions",
+        "Parameters and Arguments",
+        "Return Values",
+        "Local and Global Scope",
+        "Fruitful Functions",
+        "while Loop",
+        "for Loop",
+        "Loop Patterns",
+        "break and continue",
+        "Infinite Loops and Guards",
+        "Opening and Reading Files",
+        "Writing to Files",
+        "File Paths",
+        "Looping Over File Lines",
+        "try except with Files",
+        "List Operations",
+        "List Methods",
+        "List Slicing",
+        "Lists and Loops",
+        "List Algorithms",
+        "Dictionary Basics",
+        "Looping Over Dictionaries",
+        "Dictionary Patterns",
+        "get() and Default Values",
+        "Tuple Basics",
+        "Tuples vs Lists",
+        "Sorting with Tuples",
+        "DSU Pattern",
+        "Tuples in Loops",
+    ),
+    "advanced": (
+        "re Module Basics",
+        "search() and findall()",
+        "Character Classes and Quantifiers",
+        "Greedy vs Non-Greedy",
+        "Practical Regex Patterns",
+        "HTTP Basics",
+        "urllib and urlopen",
+        "Parsing HTML",
+        "Web Scraping Patterns",
+        "Error Handling in Networking",
+        "JSON Basics",
+        "Parsing JSON",
+        "REST APIs and Requests",
+        "XML Basics",
+        "Service-Oriented Architecture",
+        "Classes and Objects",
+        "init and self",
+        "Methods",
+        "Inheritance",
+        "OOP Design Patterns",
+    ),
+    "very_advanced": (
+        "SQLite Basics",
+        "CREATE INSERT SELECT",
+        "Filtering and Sorting",
+        "Joins and Relationships",
+        "Python SQLite Integration",
+        "Data Visualization Concepts",
+        "OpenStreetMap Data",
+        "Network Graphs",
+        "Mail Data Analysis",
+        "End-to-End Data Pipeline",
+    ),
+}
 
-def concepts_for_level(level: str) -> tuple[str, ...]:
-    return PLACEMENT_CONCEPTS_BY_LEVEL.get(level.lower(), PLACEMENT_CONCEPTS_BY_LEVEL["beginner"])
+# Syllabus sub-lesson rubric_concept strings (may differ from placement MCQ rubric; can include Ch tags).
+SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL: dict[str, tuple[str, ...]] = {
+    "beginner": (
+        "Programs, semantics, and errors",
+        "Programs, semantics, and errors",
+        "Programs, semantics, and errors",
+        "Programs, semantics, and errors",
+        "Variables, values, and types",
+        "Expressions and operators",
+        "Variables, values, and types",
+        "Expressions and operators",
+        "Strings and basic I/O",
+        "Conditionals",
+        "Conditionals",
+        "Conditionals",
+        "Conditionals",
+        "Programs, semantics, and errors",
+        "Strings and basic I/O",
+        "Strings and basic I/O",
+        "Strings and basic I/O",
+        "Strings and basic I/O",
+        "Strings and basic I/O",
+    ),
+    "intermediate": (
+        "Functions (Ch 4): definitions, calls, parameters, return values",
+        "Functions (Ch 4): definitions, calls, parameters, return values",
+        "Functions (Ch 4): definitions, calls, parameters, return values",
+        "Functions (Ch 4): definitions, calls, parameters, return values",
+        "Functions (Ch 4): definitions, calls, parameters, return values",
+        "Iteration and loops (Ch 5): for, while, definite and indefinite iteration",
+        "Iteration and loops (Ch 5): for, while, definite and indefinite iteration",
+        "Iteration and loops (Ch 5): for, while, definite and indefinite iteration",
+        "Iteration and loops (Ch 5): for, while, definite and indefinite iteration",
+        "Iteration and loops (Ch 5): for, while, definite and indefinite iteration",
+        "Files and persistence (Ch 7): reading, writing, file objects",
+        "Files and persistence (Ch 7): reading, writing, file objects",
+        "Files and persistence (Ch 7): reading, writing, file objects",
+        "Files and persistence (Ch 7): reading, writing, file objects",
+        "Files and persistence (Ch 7): reading, writing, file objects",
+        "Lists and mutability (Ch 8): indexing, methods, aliasing",
+        "Lists and mutability (Ch 8): indexing, methods, aliasing",
+        "Lists and mutability (Ch 8): indexing, methods, aliasing",
+        "Lists and mutability (Ch 8): indexing, methods, aliasing",
+        "Lists and mutability (Ch 8): indexing, methods, aliasing",
+        "Dictionaries and mappings (Ch 9): keys, values, dict operations",
+        "Dictionaries and mappings (Ch 9): keys, values, dict operations",
+        "Dictionaries and mappings (Ch 9): keys, values, dict operations",
+        "Dictionaries and mappings (Ch 9): keys, values, dict operations",
+        "Tuples and immutability (Ch 10): tuples, packing, unpacking",
+        "Tuples and immutability (Ch 10): tuples, packing, unpacking",
+        "Tuples and immutability (Ch 10): tuples, packing, unpacking",
+        "Tuples and immutability (Ch 10): tuples, packing, unpacking",
+        "Tuples and immutability (Ch 10): tuples, packing, unpacking",
+    ),
+    "advanced": (
+        "Regular expressions",
+        "Regular expressions",
+        "Regular expressions",
+        "Regular expressions",
+        "Regular expressions",
+        "Networked programs and protocols",
+        "Networked programs and protocols",
+        "Networked programs and protocols",
+        "Networked programs and protocols",
+        "Networked programs and protocols",
+        "Clients, services, and data exchange",
+        "Clients, services, and data exchange",
+        "Clients, services, and data exchange",
+        "Clients, services, and data exchange",
+        "Clients, services, and data exchange",
+        "Objects, classes, and OOP",
+        "Objects, classes, and OOP",
+        "Objects, classes, and OOP",
+        "Objects, classes, and OOP",
+        "Objects, classes, and OOP",
+    ),
+    "very_advanced": (
+        "Databases and SQL with Python",
+        "Databases and SQL with Python",
+        "Databases and SQL with Python",
+        "Databases and SQL with Python",
+        "Databases and SQL with Python",
+        "Data visualization",
+        "Data visualization",
+        "Data visualization",
+        "Data visualization",
+        "Data visualization",
+    ),
+}
+
+FORBIDDEN_TERMS_BY_LEVEL: dict[str, tuple[str, ...]] = {
+    "beginner": (
+        "self.",
+        "class ",
+        "__init__",
+        "asyncio",
+        "import os",
+        "sql",
+        "database",
+        "api",
+        "json.loads",
+        "regex",
+        "re.compile",
+        "urllib",
+        "socket",
+        ".cursor()",
+        "matplotlib",
+    ),
+    "intermediate": (
+        "self.",
+        "__init__",
+        "asyncio",
+        "sql",
+        "database",
+        ".cursor()",
+        "matplotlib",
+        "urllib",
+        "socket",
+    ),
+    "advanced": (
+        "self.",
+        "__init__",
+        "asyncio",
+        "sql",
+        "database",
+        ".cursor()",
+        "matplotlib",
+    ),
+    "very_advanced": (),
+}
 
 
 def normalize_level(level: str) -> str:
@@ -110,6 +401,26 @@ def normalize_level(level: str) -> str:
     if k in LEVEL_ORDER:
         return k
     return "beginner"
+
+
+def concepts_for_level(level: str) -> tuple[str, ...]:
+    return PLACEMENT_CONCEPTS_BY_LEVEL.get(level.lower(), PLACEMENT_CONCEPTS_BY_LEVEL["beginner"])
+
+
+def forbidden_terms_for_level(level: str) -> tuple[str, ...]:
+    """Return terms that must not appear in question stems for this level."""
+    return FORBIDDEN_TERMS_BY_LEVEL.get(normalize_level(level), ())
+
+
+def chapter_scope_for_level(level: str) -> str:
+    """Return a human-readable chapter scope string for prompt injection."""
+    scopes = {
+        "beginner": "Ch 1-3 and Ch 6 (variables, expressions, conditionals, strings, basic I/O, errors)",
+        "intermediate": "Ch 4-5 and Ch 7-10 (functions, loops, files, lists, dictionaries, tuples)",
+        "advanced": "Ch 11-13 (regex, networking, web services, data parsing)",
+        "very_advanced": "Ch 14-16 (OOP, databases, visualization)",
+    }
+    return scopes.get(normalize_level(level), scopes["beginner"])
 
 
 def validate_question_concepts_for_level(questions: list[dict], level: str) -> None:
