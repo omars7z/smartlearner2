@@ -7,6 +7,7 @@ pydantic-settings
 python-jose[cryptography]
 bcrypt>=4.0.0
 groq
+google-generativeai
 langchain
 langchain-groq
 numpy
