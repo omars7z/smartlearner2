@@ -1,3 +1,7 @@
+import sys
+
+sys.dont_write_bytecode = True
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,7 +12,6 @@ from app.api.routes import router
 from app.core.groq_rate_limits import response_header_pairs
 from app.db.base import Base
 from app.db.session import engine
-from app.models import entities  # noqa: F401
 
 
 async def _ensure_users_table_columns(conn) -> None:
@@ -68,11 +71,6 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "http://localhost:5175",
-        "http://127.0.0.1:5175",
-        "http://localhost:5176",
-        "http://127.0.0.1:5176",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:8080",

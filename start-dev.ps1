@@ -16,9 +16,9 @@ $venvPython = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
 if ($venvPython) {
-    $backendCmd = "& '$venvPython' -m uvicorn app.main:app --reload"
+    $backendCmd = "& '$venvPython' -B -m uvicorn app.main:app --reload"
 } else {
-    $backendCmd = "python -m uvicorn app.main:app --reload"
+    $backendCmd = "python -B -m uvicorn app.main:app --reload"
 }
 
 $commonArgs = @("-NoExit", "-NoProfile", "-Command")

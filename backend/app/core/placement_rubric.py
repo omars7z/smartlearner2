@@ -263,94 +263,59 @@ SYLLABUS_TOPIC_ORDER_BY_LEVEL: dict[str, tuple[str, ...]] = {
 }
 
 # Syllabus sub-lesson rubric_concept strings (may differ from placement MCQ rubric; can include Ch tags).
-SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL: dict[str, tuple[str, ...]] = {
-    "beginner": (
-        "Programs, semantics, and errors",
-        "Programs, semantics, and errors",
-        "Programs, semantics, and errors",
-        "Programs, semantics, and errors",
-        "Variables, values, and types",
-        "Expressions and operators",
-        "Variables, values, and types",
-        "Expressions and operators",
-        "Strings and basic I/O",
-        "Conditionals",
-        "Conditionals",
-        "Conditionals",
-        "Conditionals",
-        "Programs, semantics, and errors",
-        "Strings and basic I/O",
-        "Strings and basic I/O",
-        "Strings and basic I/O",
-        "Strings and basic I/O",
-        "Strings and basic I/O",
-    ),
-    "intermediate": (
-        "Functions (Ch 4): definitions, calls, parameters, return values",
-        "Functions (Ch 4): definitions, calls, parameters, return values",
-        "Functions (Ch 4): definitions, calls, parameters, return values",
-        "Functions (Ch 4): definitions, calls, parameters, return values",
-        "Functions (Ch 4): definitions, calls, parameters, return values",
-        "Iteration and loops (Ch 5): for, while, definite and indefinite iteration",
-        "Iteration and loops (Ch 5): for, while, definite and indefinite iteration",
-        "Iteration and loops (Ch 5): for, while, definite and indefinite iteration",
-        "Iteration and loops (Ch 5): for, while, definite and indefinite iteration",
-        "Iteration and loops (Ch 5): for, while, definite and indefinite iteration",
-        "Files and persistence (Ch 7): reading, writing, file objects",
-        "Files and persistence (Ch 7): reading, writing, file objects",
-        "Files and persistence (Ch 7): reading, writing, file objects",
-        "Files and persistence (Ch 7): reading, writing, file objects",
-        "Files and persistence (Ch 7): reading, writing, file objects",
-        "Lists and mutability (Ch 8): indexing, methods, aliasing",
-        "Lists and mutability (Ch 8): indexing, methods, aliasing",
-        "Lists and mutability (Ch 8): indexing, methods, aliasing",
-        "Lists and mutability (Ch 8): indexing, methods, aliasing",
-        "Lists and mutability (Ch 8): indexing, methods, aliasing",
-        "Dictionaries and mappings (Ch 9): keys, values, dict operations",
-        "Dictionaries and mappings (Ch 9): keys, values, dict operations",
-        "Dictionaries and mappings (Ch 9): keys, values, dict operations",
-        "Dictionaries and mappings (Ch 9): keys, values, dict operations",
-        "Tuples and immutability (Ch 10): tuples, packing, unpacking",
-        "Tuples and immutability (Ch 10): tuples, packing, unpacking",
-        "Tuples and immutability (Ch 10): tuples, packing, unpacking",
-        "Tuples and immutability (Ch 10): tuples, packing, unpacking",
-        "Tuples and immutability (Ch 10): tuples, packing, unpacking",
-    ),
-    "advanced": (
-        "Regular expressions",
-        "Regular expressions",
-        "Regular expressions",
-        "Regular expressions",
-        "Regular expressions",
-        "Networked programs and protocols",
-        "Networked programs and protocols",
-        "Networked programs and protocols",
-        "Networked programs and protocols",
-        "Networked programs and protocols",
-        "Clients, services, and data exchange",
-        "Clients, services, and data exchange",
-        "Clients, services, and data exchange",
-        "Clients, services, and data exchange",
-        "Clients, services, and data exchange",
-        "Objects, classes, and OOP",
-        "Objects, classes, and OOP",
-        "Objects, classes, and OOP",
-        "Objects, classes, and OOP",
-        "Objects, classes, and OOP",
-    ),
-    "very_advanced": (
-        "Databases and SQL with Python",
-        "Databases and SQL with Python",
-        "Databases and SQL with Python",
-        "Databases and SQL with Python",
-        "Databases and SQL with Python",
-        "Data visualization",
-        "Data visualization",
-        "Data visualization",
-        "Data visualization",
-        "Data visualization",
-    ),
+# Maps each concept to how many times it appears across lessons for that level (eliminates repetition).
+_SYLLABUS_RUBRIC_CONCEPT_COUNTS_BY_LEVEL: dict[str, dict[str, int]] = {
+    "beginner": {
+        "Programs, semantics, and errors": 5,
+        "Variables, values, and types": 2,
+        "Expressions and operators": 2,
+        "Strings and basic I/O": 6,
+        "Conditionals": 4,
+    },
+    "intermediate": {
+        "Functions (Ch 4): definitions, calls, parameters, return values": 5,
+        "Iteration and loops (Ch 5): for, while, definite and indefinite iteration": 5,
+        "Files and persistence (Ch 7): reading, writing, file objects": 5,
+        "Lists and mutability (Ch 8): indexing, methods, aliasing": 5,
+        "Dictionaries and mappings (Ch 9): keys, values, dict operations": 4,
+        "Tuples and immutability (Ch 10): tuples, packing, unpacking": 5,
+    },
+    "advanced": {
+        "Regular expressions": 5,
+        "Networked programs and protocols": 5,
+        "Clients, services, and data exchange": 5,
+        "Objects, classes, and OOP": 5,
+    },
+    "very_advanced": {
+        "Databases and SQL with Python": 5,
+        "Data visualization": 5,
+    },
 }
+
+
+def normalize_level(level: str) -> str:
+    k = (level or "beginner").lower().replace(" ", "_").replace("-", "_")
+    if k == "veryadvanced":
+        return "very_advanced"
+    if k in LEVEL_ORDER:
+        return k
+    return "beginner"
+
+
+# Cached expanded tuples for backward compatibility with existing code.
+def _build_syllabus_rubric_concepts() -> dict[str, tuple[str, ...]]:
+    """Expand concept counts into flat tuples (one concept per lesson)."""
+    result = {}
+    for level in LEVEL_ORDER:
+        norm = normalize_level(level)
+        concept_counts = _SYLLABUS_RUBRIC_CONCEPT_COUNTS_BY_LEVEL.get(norm, {})
+        expanded = []
+        for concept, count in concept_counts.items():
+            expanded.extend([concept] * count)
+        result[level] = tuple(expanded)
+    return result
+
+SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL: dict[str, tuple[str, ...]] = _build_syllabus_rubric_concepts()
 
 FORBIDDEN_TERMS_BY_LEVEL: dict[str, tuple[str, ...]] = {
     "beginner": (
@@ -392,15 +357,6 @@ FORBIDDEN_TERMS_BY_LEVEL: dict[str, tuple[str, ...]] = {
     ),
     "very_advanced": (),
 }
-
-
-def normalize_level(level: str) -> str:
-    k = (level or "beginner").lower().replace(" ", "_").replace("-", "_")
-    if k == "veryadvanced":
-        return "very_advanced"
-    if k in LEVEL_ORDER:
-        return k
-    return "beginner"
 
 
 def concepts_for_level(level: str) -> tuple[str, ...]:

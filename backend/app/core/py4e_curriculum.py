@@ -217,15 +217,11 @@ TRACKS: tuple[dict[str, Any], ...] = (
     {
         "id": "beginner",
         "label_en": "Beginner",
-        "label_ar": "مبتدئ",
-        "goal_ar": "فهم أساسيات البرمجة والتفكير المنطقي، مع النصوص مبكراً لدعم المدخلات والمخرجات.",
         "chapter_keys": ("py4e_01_intro", "py4e_02_variables", "py4e_03_conditional", "py4e_06_strings"),
     },
     {
         "id": "intermediate",
         "label_en": "Intermediate",
-        "label_ar": "متوسط",
-        "goal_ar": "الدوال، التكرار، الملفات، والهياكل الأساسية للبيانات (قوائم، قواميس، صفوف).",
         "chapter_keys": (
             "py4e_04_functions",
             "py4e_05_iterations",
@@ -238,15 +234,11 @@ TRACKS: tuple[dict[str, Any], ...] = (
     {
         "id": "advanced",
         "label_en": "Advanced",
-        "label_ar": "متقدم",
-        "goal_ar": "التعبيرات النمطية، الشبكات، خدمات الويب (JSON/XML/APIs)، والبرمجة كائنية التوجه.",
         "chapter_keys": ("py4e_11_regex", "py4e_12_network", "py4e_13_web", "py4e_14_objects"),
     },
     {
         "id": "very_advanced",
         "label_en": "Very Advanced",
-        "label_ar": "متقدم جداً",
-        "goal_ar": "قواعد البيانات وSQL، وتصور البيانات (خرائط، شبكات، بريد).",
         "chapter_keys": ("py4e_15_database", "py4e_16_viz"),
     },
 )

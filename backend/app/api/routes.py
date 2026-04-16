@@ -75,12 +75,6 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
     return await _login_issue_token(payload, db)
 
 
-@router.post("/auth/login", response_model=TokenResponse)
-async def login_alias(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
-    """Same as /auth/token — kept for clients that expect /auth/login."""
-    return await _login_issue_token(payload, db)
-
-
 @router.post("/placement/start")
 async def placement_start(
     payload: PlacementStartRequest,
