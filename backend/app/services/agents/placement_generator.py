@@ -1,3 +1,4 @@
+import difflib
 import random
 
 from app.core.placement_rubric import (
@@ -22,7 +23,9 @@ PLACEMENT_MCQ_SYSTEM_PROMPT = (
     "Never use self, classes, asyncio, SQL, APIs, or OOP concepts for beginner level. "
     "Return JSON only: question (string), choices (array of exactly 4 distinct strings), "
     "correct_answer (must exactly match one of choices), concept (copy rubric_concept verbatim). "
-    "Test conceptual understanding, not memorization or trivia."
+    "Test conceptual understanding, not memorization or trivia. "
+    "Across the five slots, each question must use a DISTINCT scenario—vary stories, code snippets, "
+    "and distractors; never reuse the same question template or stem pattern."
 )
 
 # User message template for .format(): lvl, chunk_text, rubric_concept, slot (1-based), question_count
@@ -36,9 +39,23 @@ DEFAULT_PLACEMENT_USER_PROMPT_TEMPLATE = (
     "- Tests ONLY the rubric objective above\n"
     "- Uses vocabulary and difficulty appropriate for {lvl} level\n"
     "- Does NOT introduce concepts from other levels or chapters\n"
-    "- Does NOT repeat wording from other slots\n"
+    "- Does NOT repeat wording, scenarios, or stems from other slots in this test\n"
     "Return JSON only."
 )
+
+
+def _placement_question_too_similar(candidate: str, prior_texts: list[str]) -> bool:
+    """Reject near-duplicate stems when wording differs slightly from an earlier slot."""
+    c = " ".join(candidate.lower().split())
+    if len(c) < 24:
+        return False
+    for p in prior_texts:
+        p2 = " ".join(p.lower().split())
+        if len(p2) < 24:
+            continue
+        if difflib.SequenceMatcher(None, c, p2).ratio() > 0.74:
+            return True
+    return False
 
 
 def _extract_question_obj(payload: dict) -> dict | None:
@@ -91,20 +108,24 @@ class PlacementGeneratorAgent(AgentPair):
             else user_prompt_template.strip()
         )
 
-        all_chunks = self.rag.retrieve_python_basics_context(
-            f"python for everybody {lvl} placement diagnostic {forced_concepts[0]}",
+        pool_fallback = self.rag.retrieve_python_basics_context(
+            f"python for everybody {lvl} placement diagnostic",
             k=24,
         )
-        if not all_chunks:
+        if not pool_fallback:
             raise AgentValidationError("No context chunks available for placement generation.")
 
-        selected_chunks = random.sample(all_chunks, min(max(question_count * 2, 10), len(all_chunks)))
         questions: list[dict] = []
 
         for idx in range(question_count):
             rubric_concept = forced_concepts[idx]
-            chunk = selected_chunks[idx % len(selected_chunks)]
-            chunk_text = str(chunk).strip()
+            slot_chunks = self.rag.retrieve_python_basics_context(
+                f"python for everybody {lvl} py4e {rubric_concept}",
+                k=14,
+            )
+            if not slot_chunks:
+                slot_chunks = pool_fallback
+            chunk_text = "\n\n---\n\n".join(slot_chunks[:5]).strip()
             user_prompt = user_tpl.format(
                 lvl=lvl,
                 chunk_text=chunk_text,
@@ -112,6 +133,8 @@ class PlacementGeneratorAgent(AgentPair):
                 slot=idx + 1,
                 question_count=question_count,
             )
+            prior_stems = [str(q.get("question", "")).strip() for q in questions if q.get("question")]
+            rejected_similar_in_slot: list[str] = []
             for _ in range(5):
                 payload = self._generate_with_retries(
                     model=self.settings.smart_model,
@@ -125,6 +148,9 @@ class PlacementGeneratorAgent(AgentPair):
                 choices = question_obj.get("choices", [])
                 correct = question_obj.get("correct_answer")
                 if not text or not isinstance(choices, list) or len(choices) != 4 or correct is None:
+                    continue
+                if _placement_question_too_similar(text, prior_stems + rejected_similar_in_slot):
+                    rejected_similar_in_slot.append(text)
                     continue
                 questions.append(
                     {

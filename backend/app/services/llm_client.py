@@ -1,12 +1,20 @@
 import json
+import logging
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 from app.core.groq_rate_limits import update_from_headers
 
 try:
     from groq import Groq
 except Exception:  # pragma: no cover
     Groq = None
+
+try:
+    import google.generativeai as genai
+except Exception:  # pragma: no cover
+    genai = None
 
 
 class LLMClientError(RuntimeError):
@@ -26,15 +34,40 @@ class LLMClient:
         self.settings = get_settings()
         self.use_validator_key = use_validator_key
         self.client = None
-        if not Groq:
-            return
-        key: str | None
-        if use_validator_key:
-            key = self.settings.groq_api_key_validators or self.settings.groq_api_key
-        else:
-            key = self.settings.groq_api_key
-        if key:
-            self.client = Groq(api_key=key)
+        if Groq:
+            key: str | None
+            if use_validator_key:
+                key = self.settings.groq_api_key_validators or self.settings.groq_api_key
+            else:
+                key = self.settings.groq_api_key
+            if key:
+                self.client = Groq(api_key=key)
+
+        self.gemini_client = None
+        if genai:
+            gemini_key = getattr(self.settings, "gemini_api_key", None)
+            if gemini_key:
+                try:
+                    genai.configure(api_key=gemini_key)
+                    self.gemini_client = genai.GenerativeModel(
+                        model_name="gemini-2.0-flash",
+                        generation_config={"response_mime_type": "application/json"},
+                    )
+                except Exception:
+                    self.gemini_client = None
+
+    def _generate_with_gemini(self, system_prompt: str, user_prompt: str) -> str:
+        """Fallback to Gemini when Groq is unavailable or rate-limited."""
+        if self.gemini_client is None:
+            raise LLMClientError("Gemini client not configured — set GEMINI_API_KEY in .env.")
+        try:
+            combined = f"{system_prompt}\n\n{user_prompt}"
+            response = self.gemini_client.generate_content(combined)
+            text = response.text or "{}"
+            logger.warning("LLM: Gemini fallback succeeded (Groq rate-limited or failed).")
+            return text
+        except Exception as exc:
+            raise LLMClientError(f"Gemini fallback also failed: {exc}") from exc
 
     def generate_json(self, model: str, system_prompt: str, user_prompt: str) -> str:
         if self.client is None:
@@ -80,11 +113,26 @@ class LLMClient:
         except LLMClientError:
             raise
         except Exception as exc:
+            is_rate_limit = "429" in str(exc) or "rate_limit" in str(exc).lower() or "quota" in str(exc).lower()
             if _is_placement_mcq_generator(system_prompt):
+                if is_rate_limit and self.gemini_client is not None:
+                    try:
+                        return self._generate_with_gemini(system_prompt, user_prompt)
+                    except LLMClientError as gem_exc:
+                        raise LLMClientError(
+                            f"Groq placement generation failed ({type(exc).__name__}: {exc}). "
+                            f"Gemini fallback also failed: {gem_exc}. "
+                            "Fix network, model name, quota, or API keys."
+                        ) from exc
                 raise LLMClientError(
                     f"Groq placement generation failed ({type(exc).__name__}: {exc}). "
                     "Fix network, model name, quota, or GROQ_API_KEY; placement does not use static questions."
                 ) from exc
+            if is_rate_limit and self.gemini_client is not None:
+                try:
+                    return self._generate_with_gemini(system_prompt, user_prompt)
+                except LLMClientError:
+                    pass
             return self._mock_json(system_prompt, user_prompt, self.use_validator_key)
 
     def _mock_json(self, system_prompt: str, user_prompt: str, use_validator_key: bool = False) -> str:

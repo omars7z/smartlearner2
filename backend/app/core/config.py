@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     smart_model: str = Field(default="llama-3.3-70b-versatile", alias="SMART_MODEL")
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     groq_api_key_validators: str | None = Field(default=None, alias="GROQ_API_KEY_VALIDATORS")
+    gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
 
     embedding_model: str = Field(default="all-MiniLM-L6-v2", alias="EMBEDDING_MODEL")
     vector_db_path: str = Field(default="./vector_db", alias="VECTOR_DB_PATH")
