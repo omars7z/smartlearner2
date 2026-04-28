@@ -73,10 +73,15 @@ class LLMClient:
 
     def generate_json(self, model: str, system_prompt: str, user_prompt: str) -> str:
         if self.client is None:
+            if self.gemini_client is not None:
+                try:
+                    return self._generate_with_gemini(system_prompt, user_prompt)
+                except LLMClientError:
+                    pass
             if _is_placement_mcq_generator(system_prompt):
                 logger.warning(
-                    "Groq client unavailable for placement; using local mock fallback. "
-                    "Set GROQ_API_KEY for live LLM questions."
+                    "Groq client unavailable for placement and Gemini fallback failed/unavailable; "
+                    "using local mock fallback."
                 )
             return self._mock_json(system_prompt, user_prompt)
         try:
@@ -84,7 +89,7 @@ class LLMClient:
             if hasattr(chat, "with_raw_response"):
                 raw = chat.with_raw_response.create(
                     model=model,
-                    temperature=0.4,
+                    temperature=0.3,
                     response_format={"type": "json_object"},
                     messages=[
                         {"role": "system", "content": system_prompt},

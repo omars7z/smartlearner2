@@ -14,6 +14,7 @@ class LessonGeneratorAgent(AgentPair):
         topic: str,
         lesson_title: str | None = None,
         *,
+        track: str = "python",
         level: str = "beginner",
         chapter_ref: int | None = None,
         adaptation_instructions: str | None = None,
@@ -22,6 +23,7 @@ class LessonGeneratorAgent(AgentPair):
         sanitized_topic = sanitize_prompt(topic)
         display_title = sanitize_prompt(lesson_title) if lesson_title else sanitized_topic
         scope_bits: list[str] = [
+            f"Track: {track}",
             f"Lesson display title: {display_title}",
             f"Rubric / search topic (slug): {sanitized_topic}",
             f"Target learner level: {level}",
@@ -48,7 +50,8 @@ class LessonGeneratorAgent(AgentPair):
                 "## Common pitfalls (short bullets); "
                 "## Practice (2–3 exercises described in text); "
                 "## Summary (bullets). "
-                "The prose MUST cite 'Python for Everybody' at least once. "
+                "For python track, cite 'Python for Everybody' at least once. "
+                "For deep_learning track, ground examples in lecture-note style deep learning practice. "
                 "Ground explanations in the provided course-text context when relevant."
             ),
             user_prompt=(

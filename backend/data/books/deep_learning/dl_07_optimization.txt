@@ -1,0 +1,9 @@
+TRACK: Deep Learning
+CHAPTER: dl_07_optimization
+TITLE: Optimization
+---
+Optimization updates parameters to reduce training loss. Stochastic gradient descent uses mini-batches to estimate gradients efficiently. Momentum accumulates gradient direction to smooth noisy updates. Adam adapts per-parameter learning rates and is often a strong default.
+
+Learning rate is the most sensitive hyperparameter. Too high causes divergence, while too low leads to slow progress and poor minima exploration. Schedulers like cosine decay or step decay improve convergence stability across long runs.
+
+A practical workflow starts with a short learning-rate range test, then chooses optimizer and scheduler. Monitoring train/validation loss together reveals whether the optimizer is unstable or simply underfitting.

@@ -1,0 +1,9 @@
+TRACK: Deep Learning
+CHAPTER: dl_08_regularization
+TITLE: Generalization and Regularization
+---
+Generalization is performance on unseen data, not just training batches. Overfitting appears when training loss drops but validation loss rises. Regularization techniques reduce overfitting by constraining model behavior.
+
+Dropout randomly disables activations during training to prevent co-adaptation. Weight decay penalizes large parameter magnitudes. Batch normalization stabilizes intermediate distributions and can accelerate optimization. Early stopping halts training when validation metrics stop improving.
+
+Regularization choices depend on dataset size and noise. Small datasets usually need stronger regularization and augmentation. Evaluation should include confidence calibration and error analysis by subgroup, not only aggregate accuracy.

@@ -1,12 +1,19 @@
 import json
-import re
 from itertools import groupby
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import flag_modified
 
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.course_repository import CourseRepository
+from app.repositories.lesson_progress_repository import LessonProgressRepository
+from app.core.placement_rubric import (
+    LEVEL_ORDER,
+    LEVEL_TO_SCORE_PCT,
+    PASS_THRESHOLD,
+    QUESTIONS_PER_LEVEL,
+    normalize_level,
+    normalize_track,
+)
 from app.services.agents import (
     AgentValidationError,
     LessonGeneratorAgent,
@@ -18,169 +25,35 @@ from app.services.agents import (
     SyllabusGeneratorAgent,
     SyllabusValidatorAgent,
 )
-from app.services.agents.syllabus_common import (
-    syllabus_allowed_topics_ordered,
-    syllabus_rubric_concepts_for_level,
-)
+from app.services.assessment_service import AssessmentService
 from app.services.guardrails import run_exam_code_in_sandbox, sanitize_prompt
 from app.services.llm_client import LLMClient
-from app.services.rag_service import RAGService
-from app.services.assessment_service import AssessmentService
-from app.repositories.lesson_progress_repository import LessonProgressRepository
-
-from app.core.placement_rubric import (
-    LEVEL_LABELS,
-    LEVEL_ORDER,
-    LEVEL_TO_SCORE_PCT,
-    PASS_THRESHOLD,
-    QUESTIONS_PER_LEVEL,
-    normalize_level,
+from app.services.orchestrator.common import (
+    assign_question_ids as _assign_question_ids,
+    duration_minutes_for_level as _duration_minutes_for_level,
+    extract_chapter_ref as _extract_chapter_ref,
+    is_dynamic_lesson_markdown as _is_dynamic_lesson_markdown,
+    lesson_response_payload as _lesson_response_payload,
+    normalized_course_level as _normalized_course_level,
 )
+from app.services.orchestrator.placement import (
+    format_placement_question as _format_placement_question,
+    placement_answer_matches as _placement_answer_matches,
+    score_to_level as _score_to_level,
+    set_placement_questions_json as _set_placement_questions_json,
+)
+from app.services.orchestrator.syllabus import (
+    build_local_syllabus_payload as _build_local_syllabus_payload,
+    topic_slug as _topic_slug,
+)
+from app.services.rag_service import RAGService
 
 
-def _topic_slug(topic: str) -> str:
-    """Stable slug for Lesson.topic (search / RAG key)."""
-    s = (topic or "").lower().strip()
-    return re.sub(r"[^a-z0-9]+", "_", s).strip("_") or "topic"
-
-
-def _placement_answer_matches(selected, correct) -> bool:
-    """LLM/JSON may mix ints, floats, and strings for the same MCQ choice."""
-    if selected is None or correct is None:
-        return False
-    a, b = str(selected).strip(), str(correct).strip()
-    if a == b:
-        return True
-    try:
-        return float(a) == float(b)
-    except ValueError:
-        return False
-
-
-def _set_placement_questions_json(placement, data: dict) -> None:
-    """Assign JSON so the ORM always persists (in-place dict edits are often ignored)."""
-    placement.questions_json = json.loads(json.dumps(data))
-    flag_modified(placement, "questions_json")
-
-
-def _score_to_level(pct: int) -> str:
-    """Legacy mapping when only a percentage is known (no multi-tier session)."""
-    if pct < 40:
-        return "beginner"
-    if pct < 75:
-        return "intermediate"
-    return "advanced"
-
-
-def _is_dynamic_lesson_markdown(markdown: str) -> bool:
-    """
-    Heuristic to detect rich/generated lesson content versus short seed text.
-    Seed syllabus descriptions are usually short paragraphs without sections/code.
-    """
-    md = (markdown or "").strip()
-    if not md:
-        return False
-    has_structure = "## " in md or "### " in md or "```" in md
-    return has_structure and len(md) >= 220
-
-
-def _format_placement_question(
-    q: dict,
-    index_in_level: int,
-    track: str,
-    level_key: str,
-    level_index: int,
-) -> dict:
-    choices = q.get("choices") or []
-    return {
-        "id": f"q{index_in_level}",
-        "order": index_in_level + 1,
-        "total": QUESTIONS_PER_LEVEL,
-        "text": q.get("question", ""),
-        "difficulty": level_key,
-        "topic": str(q.get("concept") or track),
-        "options": choices,
-        "level": level_key,
-        "level_label": LEVEL_LABELS.get(level_key, level_key),
-        "level_index": level_index,
-        "level_stage": level_index + 1,
-        "levels_total": len(LEVEL_ORDER),
-    }
-
-
-def _build_local_syllabus_payload(level: str) -> dict:
-    """Deterministic syllabus fallback when LLM output is missing/invalid."""
-    lvl = normalize_level(level)
-    topics = syllabus_allowed_topics_ordered(lvl)
-    concepts = syllabus_rubric_concepts_for_level(lvl)
-    concept_by_topic = {topics[i]: concepts[i] for i in range(min(len(topics), len(concepts)))}
-    if concepts:
-        concept_fallback = concepts[-1]
-    else:
-        concept_fallback = "Python fundamentals"
-
-    chapter_map = {
-        "beginner": [1, 2, 3, 6],
-        "intermediate": [4, 5, 7, 8, 9, 10],
-        "advanced": [11, 12, 13, 14],
-        "very_advanced": [15, 16],
-    }
-    chapter_titles = {
-        1: "Why we program",
-        2: "Variables, Expressions and Statements",
-        3: "Conditional execution",
-        4: "Functions",
-        5: "Iteration",
-        6: "Strings",
-        7: "Files",
-        8: "Lists",
-        9: "Dictionaries",
-        10: "Tuples",
-        11: "Regular Expressions",
-        12: "Networked Programs",
-        13: "Web Services",
-        14: "Object-Oriented Programming",
-        15: "Databases and SQL",
-        16: "Visualizing Data",
-    }
-    allowed_chapters = chapter_map.get(lvl, chapter_map["beginner"])
-    chunk = max(1, (len(topics) + len(allowed_chapters) - 1) // len(allowed_chapters))
-
-    units: list[dict] = []
-    idx = 0
-    for ch in allowed_chapters:
-        part = topics[idx : idx + chunk]
-        idx += chunk
-        if not part:
-            break
-        lessons: list[dict] = []
-        for t in part:
-            lessons.append(
-                {
-                    "topic": t,
-                    "lesson_title": f"Practical {t}",
-                    "description": (
-                        f"Learn {t} through practical Python exercises and small examples. "
-                        "Practice predictable coding patterns and explain your reasoning clearly."
-                    ),
-                    "learning_objectives": [
-                        f"Identify key ideas behind {t}.",
-                        f"Write a short Python example using {t}.",
-                        f"Debug common mistakes related to {t}.",
-                    ],
-                    "rubric_concept": concept_by_topic.get(t, concept_fallback),
-                    "chapter_ref": ch,
-                }
-            )
-        units.append(
-            {
-                "chapter": ch,
-                "title": chapter_titles.get(ch, f"Chapter {ch}"),
-                "summary": f"Core learning outcomes for {chapter_titles.get(ch, f'Chapter {ch}')}.",
-                "lessons": lessons,
-            }
-        )
-    return {"units": units}
+def _track_from_course_title(title: str | None) -> str:
+    t = (title or "").strip().lower()
+    if "deep learning" in t or "neural" in t or "machine learning" in t:
+        return "deep_learning"
+    return "python"
 
 
 class OrchestratorService:
@@ -208,7 +81,7 @@ class OrchestratorService:
             raise ValueError(
                 f"Placement must use exactly {QUESTIONS_PER_LEVEL} questions per rubric tier (got {question_count})."
             )
-        raw = self.placement_generator.generate(level=level, question_count=question_count)
+        raw = self.placement_generator.generate(level=level, question_count=question_count, track="python")
         await self.agent_repo.log_run(
             agent_name=self.placement_generator.name,
             stage="generate",
@@ -218,7 +91,7 @@ class OrchestratorService:
             user_id=user_id,
         )
         try:
-            generated = self.placement_validator.validate(raw, level, question_count)
+            generated = self.placement_validator.validate(raw, level, question_count, track="python")
         except AgentValidationError as exc:
             await self.agent_repo.log_run(
                 agent_name=self.placement_validator.name,
@@ -242,7 +115,12 @@ class OrchestratorService:
 
     async def start_placement_session(self, user_id: int, track: str) -> dict:
         first_level = LEVEL_ORDER[0]
-        raw = self.placement_generator.generate(level=first_level, question_count=QUESTIONS_PER_LEVEL)
+        norm_track = normalize_track(track)
+        raw = self.placement_generator.generate(
+            level=first_level,
+            question_count=QUESTIONS_PER_LEVEL,
+            track=norm_track,
+        )
         await self.agent_repo.log_run(
             agent_name=self.placement_generator.name,
             stage="generate",
@@ -257,7 +135,7 @@ class OrchestratorService:
             user_id=user_id,
         )
         try:
-            generated = self.placement_validator.validate(raw, first_level, QUESTIONS_PER_LEVEL)
+            generated = self.placement_validator.validate(raw, first_level, QUESTIONS_PER_LEVEL, track=norm_track)
         except AgentValidationError as exc:
             await self.agent_repo.log_run(
                 agent_name=self.placement_validator.name,
@@ -450,7 +328,11 @@ class OrchestratorService:
             return {"status": "ok", "finished": True, "placement_result": placement_result}
 
         next_level = LEVEL_ORDER[level_index + 1]
-        raw = self.placement_generator.generate(level=next_level, question_count=QUESTIONS_PER_LEVEL)
+        raw = self.placement_generator.generate(
+            level=next_level,
+            question_count=QUESTIONS_PER_LEVEL,
+            track=normalize_track(track),
+        )
         await self.agent_repo.log_run(
             agent_name=self.placement_generator.name,
             stage="generate",
@@ -465,7 +347,12 @@ class OrchestratorService:
             user_id=user_id,
         )
         try:
-            generated = self.placement_validator.validate(raw, next_level, QUESTIONS_PER_LEVEL)
+            generated = self.placement_validator.validate(
+                raw,
+                next_level,
+                QUESTIONS_PER_LEVEL,
+                track=normalize_track(track),
+            )
         except AgentValidationError as exc:
             await self.agent_repo.log_run(
                 agent_name=self.placement_validator.name,
@@ -508,6 +395,7 @@ class OrchestratorService:
         score = placement.score or 0
         pj = placement.questions_json
         sess = pj.get("placement_session") if isinstance(pj, dict) else {}
+        track = normalize_track(sess.get("track") if isinstance(sess, dict) else None)
         fl = sess.get("final_level") if isinstance(sess, dict) else None
         if fl:
             level_str = normalize_level(str(fl))
@@ -522,16 +410,30 @@ class OrchestratorService:
             weak_topics = list(dict.fromkeys(str(t).strip() for t in raw_weak if str(t).strip()))
             strong_topics = list(dict.fromkeys(str(t).strip() for t in raw_strong if str(t).strip()))
 
-        raw_syllabus = self.syllabus_generator.generate(
-            score=int(score) if score is not None else 0,
-            level=level_str,
-            weak_topics=weak_topics,
-            strong_topics=strong_topics,
-        )
+        try:
+            raw_syllabus = self.syllabus_generator.generate(
+                score=int(score) if score is not None else 0,
+                level=level_str,
+                track=track,
+                weak_topics=weak_topics,
+                strong_topics=strong_topics,
+            )
+        except AgentValidationError:
+            raw_syllabus = _build_local_syllabus_payload(
+                level_str,
+                track=track,
+                weak_topics=weak_topics,
+                strong_topics=strong_topics,
+            )
         if not isinstance(raw_syllabus, dict) or (
             not raw_syllabus.get("units") and not raw_syllabus.get("lessons")
         ):
-            raw_syllabus = _build_local_syllabus_payload(level_str)
+            raw_syllabus = _build_local_syllabus_payload(
+                level_str,
+                track=track,
+                weak_topics=weak_topics,
+                strong_topics=strong_topics,
+            )
         await self.agent_repo.log_run(
             agent_name=self.syllabus_generator.name,
             stage="generate",
@@ -548,7 +450,7 @@ class OrchestratorService:
             user_id=user_id,
         )
         try:
-            generated = self.syllabus_validator.validate(raw_syllabus, placement_level=level_str)
+            generated = self.syllabus_validator.validate(raw_syllabus, placement_level=level_str, track=track)
         except AgentValidationError as exc:
             await self.agent_repo.log_run(
                 agent_name=self.syllabus_validator.name,
@@ -597,6 +499,7 @@ class OrchestratorService:
         sorted_lessons = sorted(course.lessons, key=lambda L: L.order_index)
         modules: list[dict] = []
         mod_idx = 0
+        lesson_duration_minutes = _duration_minutes_for_level(level_str)
 
         def _module_key(les) -> str:
             ut = (les.unit_title or "").strip()
@@ -608,7 +511,10 @@ class OrchestratorService:
             unit_title = rows[0].unit_title if rows[0].unit_title else None
             if unit_label == "__single__" and len(sorted_lessons) == len(rows):
                 mod_title = course.title
-                mod_desc = f"{level_str.replace('_', ' ').title()} track — Python for Everybody scope."
+                if normalize_track(track) in {"deep_learning", "dl"}:
+                    mod_desc = f"{level_str.replace('_', ' ').title()} track — Deep Learning scope."
+                else:
+                    mod_desc = f"{level_str.replace('_', ' ').title()} track — Python for Everybody scope."
             else:
                 mod_title = unit_title or f"Module {mod_idx}"
                 mod_desc = f"Unit in {course.title}."
@@ -619,7 +525,7 @@ class OrchestratorService:
                 "title": mod_title,
                 "description": mod_desc,
                 "topics": list({r.topic for r in rows}),
-                "duration": f"{len(rows) * 20} min",
+                "duration": f"{len(rows) * lesson_duration_minutes} min",
                 "target_level": level_str,
                 "lessons": [
                     {
@@ -628,7 +534,7 @@ class OrchestratorService:
                         "title": les.title,
                         "topic": les.topic,
                         "topic_name": les.topic,
-                        "duration_minutes": 20,
+                        "duration_minutes": lesson_duration_minutes,
                         "order": les.order_index,
                     }
                     for les in rows
@@ -640,7 +546,7 @@ class OrchestratorService:
             "intent": "syllabus_generation",
             "result": {
                 "status": "generated",
-                "track": "python",
+                "track": track,
                 "level": level_str,
                 "syllabus": modules,
                 "validation": {
@@ -658,48 +564,42 @@ class OrchestratorService:
         if lesson is None:
             raise ValueError("Lesson not found")
 
+        # Get level from parent course (used by both cached and freshly generated responses)
+        level: str = "beginner"
+        course_track = "python"
+        chapter_ref: int | None = None
+        duration_minutes = _duration_minutes_for_level(level)
+        try:
+            if lesson.course_id:
+                course = await self.db.get(Course, lesson.course_id)
+                if course and course.level:
+                    level = _normalized_course_level(course.level)
+                    duration_minutes = _duration_minutes_for_level(level)
+                if course:
+                    course_track = _track_from_course_title(getattr(course, "title", None))
+        except Exception:
+            pass
+
         # Serve persisted lesson content first. This preserves adapted lesson
         # variants generated after failed assessments instead of overwriting them
         # on every lesson view refresh.
         existing_markdown = (lesson.markdown_content or "").strip()
         if existing_markdown and _is_dynamic_lesson_markdown(existing_markdown):
-            return {
-                "status": "success",
-                "lesson": {
-                    "lesson_id": f"lesson_{lesson.id}",
-                    "title": lesson.title,
-                    "duration_minutes": 25,
-                    "sections": [{"type": "markdown", "content": existing_markdown}],
-                },
-                "generated_in_ms": 0,
-                "llm_used": False,
-            }
-
-        # Get level from parent course
-        level: str = "beginner"
-        chapter_ref: int | None = None
-        try:
-            if lesson.course_id:
-                course = await self.db.get(Course, lesson.course_id)
-                if course and course.level:
-                    raw_level = str(course.level).lower().replace(" ", "_")
-                    level = normalize_level(raw_level)
-        except Exception:
-            pass
+            return _lesson_response_payload(
+                lesson_id=lesson.id,
+                title=lesson.title,
+                duration_minutes=duration_minutes,
+                markdown=existing_markdown,
+                llm_used=False,
+            )
 
         # Get chapter_ref from lesson metadata if available
-        try:
-            meta = lesson.metadata_json if hasattr(lesson, "metadata_json") else None
-            if isinstance(meta, dict):
-                cr = meta.get("chapter_ref")
-                if cr is not None:
-                    chapter_ref = int(cr)
-        except Exception:
-            pass
+        chapter_ref = _extract_chapter_ref(getattr(lesson, "metadata_json", None))
 
         raw_lesson = self.lesson_generator.generate(
             topic=lesson.topic,
             lesson_title=lesson.title,
+            track=course_track,
             level=level,
             chapter_ref=chapter_ref,
         )
@@ -741,17 +641,13 @@ class OrchestratorService:
         md = (updated.markdown_content or "").strip()
         if not md:
             md = f"## {updated.title}\n\n_Content could not be loaded. Try refreshing or regenerating this lesson._"
-        return {
-            "status": "success",
-            "lesson": {
-                "lesson_id": f"lesson_{updated.id}",
-                "title": updated.title,
-                "duration_minutes": 25,
-                "sections": [{"type": "markdown", "content": md}],
-            },
-            "generated_in_ms": 0,
-            "llm_used": True,
-        }
+        return _lesson_response_payload(
+            lesson_id=updated.id,
+            title=updated.title,
+            duration_minutes=duration_minutes,
+            markdown=md,
+            llm_used=True,
+        )
 
     async def answer_question(
         self,
@@ -876,7 +772,7 @@ class OrchestratorService:
         if lesson.course is None or lesson.course.user_id != user_id:
             raise ValueError("Lesson not found")
         progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
-        level = normalize_level((lesson.course.level or "beginner").replace(" ", "_").lower())
+        level = _normalized_course_level(lesson.course.level)
         previous_questions = (
             list(progress.current_questions_json)
             if isinstance(progress.current_questions_json, list)
@@ -890,15 +786,13 @@ class OrchestratorService:
             attempt_number=max(1, progress.attempts + 1),
             previous_questions=previous_questions,
         )
-        for i, q in enumerate(questions):
-            q["id"] = f"q{i}"
-        progress.current_questions_json = questions
+        progress.current_questions_json = _assign_question_ids(questions)
         await self.lesson_progress_repo.save(progress)
         return {
             "lesson_id": f"lesson_{lesson.id}",
             "attempts_used": progress.attempts,
             "attempts_remaining": max(0, 3 - progress.attempts),
-            "questions": questions,
+            "questions": progress.current_questions_json,
         }
 
     async def submit_lesson_assessment(
@@ -915,7 +809,7 @@ class OrchestratorService:
         progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
         questions = progress.current_questions_json or []
         if not isinstance(questions, list) or len(questions) != 5:
-            level = normalize_level((lesson.course.level or "beginner").replace(" ", "_").lower())
+            level = _normalized_course_level(lesson.course.level)
             questions = await self.assessment_service.generate_assessment(
                 topic=lesson.topic,
                 level=level,
@@ -924,9 +818,8 @@ class OrchestratorService:
                 attempt_number=max(1, progress.attempts + 1),
                 previous_questions=[],
             )
-            for i, q in enumerate(questions):
-                q["id"] = f"q{i}"
-            progress.current_questions_json = questions
+            progress.current_questions_json = _assign_question_ids(questions)
+            questions = progress.current_questions_json
 
         answer_map: dict[int, int] = {}
         for a in answers:
@@ -980,18 +873,12 @@ class OrchestratorService:
             if attempt_number == 1
             else "Use even simpler explanation, step-by-step breakdown, and focus on weak concepts."
         )
-        level = normalize_level((lesson.course.level or "beginner").replace(" ", "_").lower())
-        chapter_ref = None
-        try:
-            if isinstance(lesson.metadata_json, dict):
-                cr = lesson.metadata_json.get("chapter_ref")
-                if cr is not None:
-                    chapter_ref = int(cr)
-        except Exception:
-            chapter_ref = None
+        level = _normalized_course_level(lesson.course.level)
+        chapter_ref = _extract_chapter_ref(lesson.metadata_json)
         raw_lesson = self.lesson_generator.generate(
             topic=lesson.topic,
             lesson_title=lesson.title,
+            track=_track_from_course_title(getattr(lesson.course, "title", None)),
             level=level,
             chapter_ref=chapter_ref,
             adaptation_instructions=adaptation,
@@ -1008,9 +895,7 @@ class OrchestratorService:
             attempt_number=max(1, progress.attempts + 1),
             previous_questions=questions if isinstance(questions, list) else [],
         )
-        for i, q in enumerate(new_questions):
-            q["id"] = f"q{i}"
-        progress.current_questions_json = new_questions
+        progress.current_questions_json = _assign_question_ids(new_questions)
         await self.lesson_progress_repo.save(progress)
         return {
             "passed": False,

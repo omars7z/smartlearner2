@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.deep_learning_curriculum import curriculum_payload as deep_learning_curriculum_payload
 from app.core.groq_rate_limits import snapshot_json
 from app.core.py4e_curriculum import curriculum_payload
 from app.core.security import create_access_token, get_current_user, get_current_user_id, get_password_hash, verify_password
@@ -30,7 +31,7 @@ from app.schemas.contracts import (
 )
 from app.services.agents import AgentValidationError
 from app.services.llm_client import LLMClientError
-from app.services.orchestrator_service import OrchestratorService
+from app.services.orchestrator import OrchestratorService
 
 router = APIRouter(prefix="/api/v1")
 
@@ -133,6 +134,12 @@ async def generate_placement(
 async def get_py4e_curriculum() -> dict:
     """Static PY4E outline: tiered tracks + per-chapter sub-lessons (textbook-style TOC)."""
     return curriculum_payload()
+
+
+@router.get("/curriculum/deep-learning")
+async def get_deep_learning_curriculum() -> dict:
+    """Deep Learning outline: tiered tracks + per-chapter sub-lessons."""
+    return deep_learning_curriculum_payload()
 
 
 @router.post("/placement/submit")

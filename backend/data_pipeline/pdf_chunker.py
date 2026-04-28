@@ -109,7 +109,7 @@ class BookChunker:
   BOOK_CONFIG: Dict[str, Dict[str, Any]] = {
     "python_py4e": {
       "track": "Python Foundations",
-      "folder": "backend/data/books/python",
+      "folder": "data/books/python",
       "chapters": {
         "py4e_01_intro": {
           "title": "Introduction",
@@ -190,6 +190,52 @@ class BookChunker:
           "title": "Data Visualization",
           "difficulty": "very_advanced",
           "topics": ["visualization"],
+        },
+      },
+    },
+    "deep_learning_lectures": {
+      "track": "Deep Learning",
+      "folder": "data/books/deep_learning",
+      "chapters": {
+        "dl_01_math": {
+          "title": "Math Foundations",
+          "difficulty": "beginner",
+          "topics": ["vectors", "matrices", "calculus"],
+        },
+        "dl_02_python": {
+          "title": "Python for Deep Learning",
+          "difficulty": "beginner",
+          "topics": ["numpy", "tensor_ops"],
+        },
+        "dl_03_data": {
+          "title": "Data Pipelines and Splits",
+          "difficulty": "beginner",
+          "topics": ["datasets", "data_splits", "leakage"],
+        },
+        "dl_04_linear_models": {
+          "title": "Linear and Logistic Models",
+          "difficulty": "beginner",
+          "topics": ["linear_regression", "logistic_regression", "losses"],
+        },
+        "dl_05_nn_basics": {
+          "title": "Neural Network Fundamentals",
+          "difficulty": "intermediate",
+          "topics": ["mlp", "activations", "forward_pass"],
+        },
+        "dl_06_backprop": {
+          "title": "Backpropagation",
+          "difficulty": "intermediate",
+          "topics": ["chain_rule", "gradients", "backward_pass"],
+        },
+        "dl_07_optimization": {
+          "title": "Optimization",
+          "difficulty": "intermediate",
+          "topics": ["sgd", "adam", "learning_rate"],
+        },
+        "dl_08_regularization": {
+          "title": "Generalization and Regularization",
+          "difficulty": "intermediate",
+          "topics": ["dropout", "batch_norm", "early_stopping"],
         },
       },
     },
@@ -449,7 +495,7 @@ def main() -> None:
   chunker = BookChunker()
 
   total = 0
-  for book_key in ["python_py4e"]:
+  for book_key in ["python_py4e", "deep_learning_lectures"]:
     print(f"Processing book: {book_key}")
     n = chunker.process_book(book_key)
     total += n

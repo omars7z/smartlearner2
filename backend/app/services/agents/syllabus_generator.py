@@ -22,15 +22,17 @@ class SyllabusGeneratorAgent(AgentPair):
         self,
         score: int,
         level: str,
+        track: str = "python",
         weak_topics: list[str] | None = None,
         strong_topics: list[str] | None = None,
     ) -> dict:
         lvl = normalize_level(level)
-        allowed_topics = syllabus_allowed_topics_ordered(lvl)
-        rubric_concepts = syllabus_rubric_concepts_for_level(lvl)
-        scope = chapter_scope_for_level(lvl)
+        track_key = (track or "python").strip().lower().replace("-", "_")
+        allowed_topics = syllabus_allowed_topics_ordered(lvl, track=track_key)
+        rubric_concepts = syllabus_rubric_concepts_for_level(lvl, track=track_key)
+        scope = chapter_scope_for_level(lvl, track=track_key)
 
-        rag_query = f"python for everybody {lvl} " + " ".join(allowed_topics)
+        rag_query = f"{track_key} lecture notes {lvl} " + " ".join(allowed_topics)
         rag_chunks = self.rag.retrieve_python_basics_context(rag_query, k=12)
         rag_context = "\n\n".join(str(c).strip() for c in rag_chunks) if rag_chunks else ""
 
@@ -58,7 +60,7 @@ class SyllabusGeneratorAgent(AgentPair):
         return self._generate_with_retries(
             model=self.settings.smart_model,
             system_prompt=(
-                "Syllabus generator for Python for Everybody (University of Michigan). "
+                f"Syllabus generator for track '{track_key}'. "
                 "Generate a personalized syllabus starting ONLY from the student's placement level. "
                 "Do NOT include content from lower levels. "
                 "Return JSON with top-level key \"units\" (array). Do NOT return flat lessons[] only. "
@@ -106,10 +108,11 @@ class SyllabusGeneratorAgent(AgentPair):
             ),
             user_prompt=(
                 f"Student placement level: {lvl}.\n"
+                f"Track: {track_key}.\n"
                 f"STRICT SCOPE: generate syllabus for {lvl} level ONLY — do not include any other level.\n"
                 f"Allowed chapters: {scope}.\n\n"
                 f"PY4E chapter structure for {lvl} (use as backbone — one unit per chapter):\n"
-                + chapter_structure_hint(lvl)
+                + chapter_structure_hint(lvl, track=track_key)
                 + f"\n\nAllowed topic strings (copy EXACTLY, use every one exactly once across all units):\n{allowed_txt}\n\n"
                 f"Rubric concepts in order (map each sub-lesson to its closest matching concept):\n{concepts_txt}\n\n"
                 f"RAG context (ground all descriptions and objectives here):\n{rag_context}\n\n"

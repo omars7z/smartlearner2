@@ -1,10 +1,13 @@
 import json
 
 from app.core.placement_rubric import (
+    DEEP_LEARNING_PLACEMENT_CONCEPTS_BY_LEVEL,
+    DEEP_LEARNING_SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL,
     PLACEMENT_CONCEPTS_BY_LEVEL,
     SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL,
     chapter_scope_for_level,
     normalize_level,
+    normalize_track,
     validate_syllabus_topics_for_level,
 )
 from app.services.agents.base import AgentPair, AgentValidationError
@@ -113,7 +116,7 @@ def flatten_syllabus_payload(payload: dict) -> list[dict]:
     return rows
 
 
-def _validate_syllabus_deterministic(payload: dict, placement_level: str | None) -> dict:
+def _validate_syllabus_deterministic(payload: dict, placement_level: str | None, track: str = "python") -> dict:
     """Deterministic fallback — mirrors placement validator pattern."""
     flat = flatten_syllabus_payload(payload)
     if not flat:
@@ -131,15 +134,23 @@ def _validate_syllabus_deterministic(payload: dict, placement_level: str | None)
 
     if placement_level:
         try:
-            validate_syllabus_topics_for_level(unique_lessons, placement_level)
+            validate_syllabus_topics_for_level(unique_lessons, placement_level, track=track)
         except ValueError as exc:
             raise AgentValidationError(str(exc)) from exc
 
     if placement_level:
         lvl = normalize_level(placement_level)
-        allowed_concepts = set(
-            SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL.get(lvl, PLACEMENT_CONCEPTS_BY_LEVEL.get(lvl, ()))
-        )
+        if normalize_track(track) in {"deep_learning", "dl"}:
+            allowed_concepts = set(
+                DEEP_LEARNING_SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL.get(
+                    lvl,
+                    DEEP_LEARNING_PLACEMENT_CONCEPTS_BY_LEVEL.get(lvl, ()),
+                )
+            )
+        else:
+            allowed_concepts = set(
+                SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL.get(lvl, PLACEMENT_CONCEPTS_BY_LEVEL.get(lvl, ()))
+            )
         for i, lesson in enumerate(unique_lessons):
             rc = str(lesson.get("rubric_concept") or "").strip()
             if rc and rc not in allowed_concepts:
@@ -154,6 +165,13 @@ def _validate_syllabus_deterministic(payload: dict, placement_level: str | None)
             "advanced": {11, 12, 13, 14},
             "very_advanced": {15, 16},
         }
+        if normalize_track(track) in {"deep_learning", "dl"}:
+            ALLOWED_CHAPTER_NUMBERS = {
+                "beginner": {1, 2, 3, 4},
+                "intermediate": {5, 6, 7, 8},
+                "advanced": {9, 10, 11, 12},
+                "very_advanced": {13, 14, 15, 16},
+            }
         lvl_ch = normalize_level(placement_level)
         allowed_ch = ALLOWED_CHAPTER_NUMBERS.get(lvl_ch, set())
         for i, lesson in enumerate(unique_lessons):
@@ -212,10 +230,11 @@ class SyllabusValidatorAgent(AgentPair):
     def __init__(self, llm: LLMClient):
         super().__init__("syllabus-validator", llm)
 
-    def validate(self, payload: dict, placement_level: str | None = None) -> dict:
+    def validate(self, payload: dict, placement_level: str | None = None, track: str = "python") -> dict:
         lvl = normalize_level(placement_level) if placement_level else "beginner"
-        allowed_topics = syllabus_allowed_topics_ordered(lvl)
-        rubric_concepts = syllabus_rubric_concepts_for_level(lvl)
+        track_key = (track or "python").strip().lower().replace("-", "_")
+        allowed_topics = syllabus_allowed_topics_ordered(lvl, track=track_key)
+        rubric_concepts = syllabus_rubric_concepts_for_level(lvl, track=track_key)
 
         ALLOWED_CHAPTERS = {
             "beginner": {
@@ -243,10 +262,18 @@ class SyllabusValidatorAgent(AgentPair):
                 16: "Visualizing Data",
             },
         }
+        if normalize_track(track_key) in {"deep_learning", "dl"}:
+            ALLOWED_CHAPTERS = {
+                "beginner": {1: "Math Foundations", 2: "Python for DL", 3: "Data Pipelines", 4: "Linear Models"},
+                "intermediate": {5: "NN Basics", 6: "Backpropagation", 7: "Optimization", 8: "Regularization"},
+                "advanced": {9: "CNN", 10: "Sequence Models", 11: "Transformers", 12: "Training Systems"},
+                "very_advanced": {13: "Generative", 14: "RL", 15: "Scaling", 16: "MLOps"},
+            }
 
         validation_input = {
             "placement_level": lvl,
-            "chapter_scope": chapter_scope_for_level(lvl),
+            "track": track_key,
+            "chapter_scope": chapter_scope_for_level(lvl, track=track_key),
             "allowed_chapters": ALLOWED_CHAPTERS.get(lvl, {}),
             "allowed_topics": allowed_topics,
             "rubric_concepts": rubric_concepts,
@@ -264,6 +291,6 @@ class SyllabusValidatorAgent(AgentPair):
                     str(out.get("error") or "SyllabusValidatorAgent rejected the syllabus")
                 )
             merged = {"units": out.get("units") or [], "lessons": payload.get("lessons")}
-            return _validate_syllabus_deterministic(merged, placement_level)
+            return _validate_syllabus_deterministic(merged, placement_level, track=track_key)
         except AgentValidationError:
-            return _validate_syllabus_deterministic(payload, placement_level)
+            return _validate_syllabus_deterministic(payload, placement_level, track=track_key)

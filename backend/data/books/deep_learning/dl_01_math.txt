@@ -1,0 +1,9 @@
+TRACK: Deep Learning
+CHAPTER: dl_01_math
+TITLE: Math Foundations
+---
+Deep learning relies on linear algebra and basic calculus. A vector is an ordered list of numbers, and a matrix is a table of numbers. Model parameters are usually represented as vectors or matrices. Forward passes use matrix multiplication to combine inputs and weights. Shapes must align, or computation fails.
+
+Gradients measure how much a loss changes when a parameter changes. For scalar functions, the derivative gives local slope. For vector-valued problems, we use partial derivatives and the gradient vector. In optimization, gradients point toward steepest increase, so training typically updates parameters in the opposite direction.
+
+The chain rule connects derivatives through nested functions. Neural networks are compositions of layers, so chain rule is essential for learning. Understanding these foundations makes debugging easier because many model bugs are actually shape or gradient flow problems.

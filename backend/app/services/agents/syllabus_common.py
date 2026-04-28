@@ -1,19 +1,28 @@
 """Shared syllabus topic ordering and chapter hints for generator and validator."""
 
 from app.core.placement_rubric import (
+    DEEP_LEARNING_PLACEMENT_CONCEPTS_BY_LEVEL,
+    DEEP_LEARNING_SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL,
+    DEEP_LEARNING_SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL,
+    DEEP_LEARNING_SYLLABUS_TOPIC_ORDER_BY_LEVEL,
     PLACEMENT_CONCEPTS_BY_LEVEL,
     SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL,
     SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL,
     SYLLABUS_TOPIC_ORDER_BY_LEVEL,
     normalize_level,
+    normalize_track,
 )
 
 
-def syllabus_allowed_topics_ordered(level: str) -> list[str]:
-    """Topics in syllabus order (PY4E-aligned), not alphabetical."""
+def syllabus_allowed_topics_ordered(level: str, track: str = "python") -> list[str]:
+    """Topics in syllabus order, not alphabetical."""
     lvl = normalize_level(level)
-    allow = SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL.get(lvl, frozenset())
-    order = SYLLABUS_TOPIC_ORDER_BY_LEVEL.get(lvl)
+    if normalize_track(track) in {"deep_learning", "dl"}:
+        allow = DEEP_LEARNING_SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL.get(lvl, frozenset())
+        order = DEEP_LEARNING_SYLLABUS_TOPIC_ORDER_BY_LEVEL.get(lvl)
+    else:
+        allow = SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL.get(lvl, frozenset())
+        order = SYLLABUS_TOPIC_ORDER_BY_LEVEL.get(lvl)
     if order:
         out: list[str] = [t for t in order if t in allow]
         for t in allow:
@@ -23,13 +32,49 @@ def syllabus_allowed_topics_ordered(level: str) -> list[str]:
     return sorted(allow)
 
 
-def syllabus_rubric_concepts_for_level(level: str) -> list[str]:
+def syllabus_rubric_concepts_for_level(level: str, track: str = "python") -> list[str]:
     lvl = normalize_level(level)
+    if normalize_track(track) in {"deep_learning", "dl"}:
+        return list(
+            DEEP_LEARNING_SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL.get(
+                lvl, DEEP_LEARNING_PLACEMENT_CONCEPTS_BY_LEVEL.get(lvl, ())
+            )
+        )
     return list(SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL.get(lvl, PLACEMENT_CONCEPTS_BY_LEVEL.get(lvl, ())))
 
 
-def chapter_structure_hint(level: str) -> str:
-    """PY4E chapter breakdown injected into the syllabus generation prompt."""
+def chapter_structure_hint(level: str, track: str = "python") -> str:
+    """Track chapter breakdown injected into syllabus prompt."""
+    norm_track = (track or "python").strip().lower().replace("-", "_")
+    if norm_track == "deep_learning":
+        hints = {
+            "beginner": (
+                "Module 1 – Math Foundations: vectors, matrices, derivatives\n"
+                "Module 2 – Python for DL: NumPy and tensor ops\n"
+                "Module 3 – Data Pipelines: dataset splits and leakage prevention\n"
+                "Module 4 – Linear Baselines: linear/logistic models and losses"
+            ),
+            "intermediate": (
+                "Module 5 – NN Basics: MLP blocks and activations\n"
+                "Module 6 – Backpropagation: chain rule and gradient flow\n"
+                "Module 7 – Optimization: SGD/Adam and LR schedules\n"
+                "Module 8 – Generalization: regularization, batch norm, early stopping"
+            ),
+            "advanced": (
+                "Module 9 – CNNs: convolution, pooling, architecture choices\n"
+                "Module 10 – Sequence Models: RNN/LSTM basics and limitations\n"
+                "Module 11 – Transformers: attention and encoder-decoder design\n"
+                "Module 12 – Training Systems: mixed precision and distributed training"
+            ),
+            "very_advanced": (
+                "Module 13 – Generative Models: VAEs and diffusion\n"
+                "Module 14 – Reinforcement Learning: policy methods\n"
+                "Module 15 – Scaling: large-model training pipelines\n"
+                "Module 16 – MLOps: serving, monitoring, drift handling"
+            ),
+        }
+        return hints.get(normalize_level(level), hints["beginner"])
+
     hints = {
         "beginner": (
             "Ch 1 – Why we program: What is programming, Hardware architecture, "

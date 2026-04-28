@@ -1,0 +1,9 @@
+TRACK: Deep Learning
+CHAPTER: dl_05_nn_basics
+TITLE: Neural Network Fundamentals
+---
+A neural network stacks layers that transform inputs into richer representations. Each dense layer computes an affine transformation followed by a non-linear activation. Without non-linearity, stacked linear layers collapse into a single linear function.
+
+Common activations include ReLU, GELU, and tanh. ReLU is simple and effective but can produce dead neurons if activations stay negative. Hidden layer width and depth affect capacity and optimization behavior. Under-parameterized models underfit, while over-parameterized models require stronger regularization.
+
+Forward pass debugging starts with shapes, then value ranges. Exploding activations, NaNs, and constant outputs often indicate initialization or data-scaling issues. Tracking layer statistics improves reliability before full-scale training.

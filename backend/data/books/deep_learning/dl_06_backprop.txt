@@ -1,0 +1,9 @@
+TRACK: Deep Learning
+CHAPTER: dl_06_backprop
+TITLE: Backpropagation
+---
+Backpropagation computes gradients of loss with respect to parameters by applying chain rule from output to input layers. The backward pass reuses intermediate values from the forward pass. Automatic differentiation tools build this gradient graph for most operations.
+
+Understanding gradient flow helps diagnose vanishing or exploding gradients. Saturating activations and very deep unnormalized networks can shrink gradients. Poor initialization and large learning rates can blow gradients up. Gradient clipping is a practical safeguard in unstable settings.
+
+A gradient check can validate custom layers: compare autograd gradients with finite-difference approximations on small inputs. This process catches algebraic mistakes before expensive training runs.

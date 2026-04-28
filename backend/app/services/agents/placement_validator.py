@@ -26,7 +26,7 @@ or {"valid": false, "error": "brief reason"}.
 If valid, echo normalized questions with correct_answer and choices as trimmed strings."""
 
 
-def _validate_placement_deterministic(data: dict, level: str, question_count: int) -> dict:
+def _validate_placement_deterministic(data: dict, level: str, question_count: int, track: str = "python") -> dict:
     """Rule-based validation and normalization (authoritative rubric enforcement)."""
     lvl = normalize_level(level)
     questions = data.get("questions") or []
@@ -58,12 +58,12 @@ def _validate_placement_deterministic(data: dict, level: str, question_count: in
         if correct_str not in norm_choices:
             raise AgentValidationError(f"Question {i + 1}: correct_answer must be one of choices.")
 
-        forbidden = forbidden_terms_for_level(lvl)
+        forbidden = forbidden_terms_for_level(lvl, track=track)
         for term in forbidden:
             if term in text_lower:
                 raise AgentValidationError(
                     f"Question {i + 1}: level {lvl!r} must not reference '{term}'. "
-                    f"Allowed scope: {chapter_scope_for_level(lvl)}."
+                    f"Allowed scope: {chapter_scope_for_level(lvl, track=track)}."
                 )
 
         normalized.append(
@@ -75,7 +75,7 @@ def _validate_placement_deterministic(data: dict, level: str, question_count: in
             }
         )
 
-    expected = list(concepts_for_level(lvl))
+    expected = list(concepts_for_level(lvl, track=track))
     for i, row in enumerate(normalized):
         if row["concept"] != expected[i]:
             raise AgentValidationError(
@@ -83,7 +83,7 @@ def _validate_placement_deterministic(data: dict, level: str, question_count: in
             )
 
     try:
-        validate_question_concepts_for_level(normalized, lvl)
+        validate_question_concepts_for_level(normalized, lvl, track=track)
     except ValueError as exc:
         raise AgentValidationError(str(exc)) from exc
 
@@ -98,11 +98,12 @@ class PlacementValidatorAgent(AgentPair):
     def __init__(self, llm: LLMClient):
         super().__init__("placement-validator", llm)
 
-    def validate(self, data: dict, level: str, question_count: int) -> dict:
+    def validate(self, data: dict, level: str, question_count: int, track: str = "python") -> dict:
         lvl = normalize_level(level)
-        expected = list(concepts_for_level(lvl))
+        expected = list(concepts_for_level(lvl, track=track))
         payload = {
             "placement_level": lvl,
+            "track": track,
             "expected_question_count": question_count,
             "rubric_concepts_in_order": expected,
             "candidate_questions": data.get("questions") or [],
@@ -117,6 +118,6 @@ class PlacementValidatorAgent(AgentPair):
             if not isinstance(out, dict) or not out.get("valid"):
                 raise AgentValidationError(str(out.get("error") or "PlacementValidatorAgent rejected input"))
             merged = {"questions": out.get("questions") or []}
-            return _validate_placement_deterministic(merged, level, question_count)
+            return _validate_placement_deterministic(merged, level, question_count, track=track)
         except AgentValidationError:
-            return _validate_placement_deterministic(data, level, question_count)
+            return _validate_placement_deterministic(data, level, question_count, track=track)

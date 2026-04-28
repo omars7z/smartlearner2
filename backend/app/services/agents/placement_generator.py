@@ -80,12 +80,14 @@ class PlacementGeneratorAgent(AgentPair):
         self,
         level: str,
         question_count: int,
+        track: str = "python",
         *,
         system_prompt: str | None = None,
         user_prompt_template: str | None = None,
     ) -> dict:
         lvl = normalize_level(level)
-        forced_concepts = concepts_for_level(lvl)
+        track_key = (track or "python").strip().lower().replace("-", "_")
+        forced_concepts = concepts_for_level(lvl, track=track_key)
         if question_count != len(forced_concepts):
             raise AgentValidationError(
                 f"Placement expects exactly {len(forced_concepts)} questions per level; got {question_count}."
@@ -97,8 +99,9 @@ class PlacementGeneratorAgent(AgentPair):
             else system_prompt.strip()
         )
         sys_prompt = (
-            sys_prompt
-            + f"\n\nLevel scope: {chapter_scope_for_level(lvl)}."
+            f"Track: {track_key}. " + sys_prompt
+            + f"\n\nTrack: {track_key}."
+            + f"\n\nLevel scope: {chapter_scope_for_level(lvl, track=track_key)}."
             + "\n\nAllowed concepts for this level (one per question slot, in order):\n"
             + "\n".join(f"{i + 1}. {c}" for i, c in enumerate(forced_concepts))
         )
@@ -109,7 +112,7 @@ class PlacementGeneratorAgent(AgentPair):
         )
 
         pool_fallback = self.rag.retrieve_python_basics_context(
-            f"python for everybody {lvl} placement diagnostic",
+            f"{track_key} {lvl} placement diagnostic lecture notes",
             k=24,
         )
         if not pool_fallback:
@@ -120,7 +123,7 @@ class PlacementGeneratorAgent(AgentPair):
         for idx in range(question_count):
             rubric_concept = forced_concepts[idx]
             slot_chunks = self.rag.retrieve_python_basics_context(
-                f"python for everybody {lvl} py4e {rubric_concept}",
+                f"{track_key} {lvl} {rubric_concept} lecture notes",
                 k=14,
             )
             if not slot_chunks:
