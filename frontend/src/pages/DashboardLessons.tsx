@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -34,6 +34,11 @@ export default function DashboardLessons() {
   const [assessmentResult, setAssessmentResult] = useState<{ correct_count: number; total: number } | null>(null)
   const [followUpExplanation, setFollowUpExplanation] = useState<any>(null)
   const [assessmentStatusMessage, setAssessmentStatusMessage] = useState<string | null>(null)
+  const [resultModalOpen, setResultModalOpen] = useState(false)
+  const [resultModalPassed, setResultModalPassed] = useState(false)
+  const [resultModalMessage, setResultModalMessage] = useState('')
+  const [resultModalNextLesson, setResultModalNextLesson] = useState<LessonDto | null>(null)
+  const lessonTopRef = useRef<HTMLDivElement | null>(null)
 
   const allLessons: { lesson: LessonDto; module: ModuleDto }[] = []
   syllabusModules.forEach((mod) => {
@@ -90,6 +95,10 @@ export default function DashboardLessons() {
     setAssessmentResult(null)
     setFollowUpExplanation(null)
     setAssessmentStatusMessage(null)
+    setResultModalOpen(false)
+    setResultModalPassed(false)
+    setResultModalMessage('')
+    setResultModalNextLesson(null)
   }, [displayLesson?.lesson_id])
 
   const renderSection = (section: LessonSection, idx: number) => {
@@ -338,6 +347,7 @@ export default function DashboardLessons() {
               {displayLesson.title}
             </h1>
             <div
+              ref={lessonTopRef}
               className="rounded-xl p-6"
               style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)' }}
             >
@@ -460,12 +470,14 @@ export default function DashboardLessons() {
                                 if (resp.next_action === 'advance_to_next_lesson') {
                                   const idx = allLessons.findIndex((x) => x.lesson.lesson_id === displayLesson.lesson_id)
                                   const next = idx >= 0 ? allLessons[idx + 1] : null
-                                  if (next) {
-                                    setSelectedLesson(next.lesson)
-                                    setCurrentLesson(next.lesson)
-                                    setCurrentTopic((next.lesson as any).topic || next.lesson.lesson_id)
-                                    setAssessmentOpen(false)
-                                  }
+                                  setResultModalPassed(true)
+                                  setResultModalNextLesson(next?.lesson ?? null)
+                                  setResultModalMessage(
+                                    followup?.explanation?.core_explanation
+                                      ? String(followup.explanation.core_explanation)
+                                      : 'Great job! You passed the assessment.'
+                                  )
+                                  setResultModalOpen(true)
                                 } else if (resp.next_action === 'retry_after_regeneration') {
                                   // The backend regenerated lesson content; reload it immediately.
                                   setContentLoading(true)
@@ -482,6 +494,21 @@ export default function DashboardLessons() {
                                   } finally {
                                     setContentLoading(false)
                                   }
+                                  setResultModalPassed(false)
+                                  setResultModalMessage(
+                                    followup?.explanation?.core_explanation
+                                      ? String(followup.explanation.core_explanation)
+                                      : 'You did not pass. The lesson has been regenerated to be easier. Review it from the start.'
+                                  )
+                                  setResultModalOpen(true)
+                                } else if (resp.next_action === 'review_required_locked') {
+                                  setResultModalPassed(false)
+                                  setResultModalMessage(
+                                    followup?.explanation?.core_explanation
+                                      ? String(followup.explanation.core_explanation)
+                                      : 'Maximum attempts reached. Please review the lesson from the start before retrying.'
+                                  )
+                                  setResultModalOpen(true)
                                 }
                               } catch (err) {
                                 // eslint-disable-next-line no-console
@@ -533,6 +560,72 @@ export default function DashboardLessons() {
           </div>
         )}
       </div>
+
+      {resultModalOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+          <div
+            className="w-full max-w-md rounded-2xl border p-5"
+            style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card)' }}
+          >
+            <h3 className="text-lg font-semibold text-[color:var(--text-primary)] mb-2">
+              {resultModalPassed ? 'Assessment Passed' : 'Assessment Result'}
+            </h3>
+            {assessmentResult && (
+              <p className="text-sm mb-2 text-[color:var(--text-primary)]">
+                Grade: {assessmentResult.correct_count}/{assessmentResult.total}
+              </p>
+            )}
+            <p className="text-sm whitespace-pre-wrap text-[color:var(--text-secondary)] mb-4">
+              {resultModalMessage}
+            </p>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setResultModalOpen(false)}
+                className="rounded-xl px-3 py-2 text-sm border"
+                style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+              >
+                Close
+              </button>
+
+              {resultModalPassed ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (resultModalNextLesson) {
+                      setSelectedLesson(resultModalNextLesson)
+                      setCurrentLesson(resultModalNextLesson)
+                      setCurrentTopic((resultModalNextLesson as any).topic || resultModalNextLesson.lesson_id)
+                      setAssessmentOpen(false)
+                    }
+                    setResultModalOpen(false)
+                  }}
+                  className="rounded-xl px-3 py-2 text-sm font-semibold text-white"
+                  style={{ background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})` }}
+                >
+                  Go to next lesson
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAssessmentOpen(false)
+                    setAssessmentQuestions([])
+                    setAssessmentAnswers({})
+                    setResultModalOpen(false)
+                    lessonTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }}
+                  className="rounded-xl px-3 py-2 text-sm font-semibold text-white"
+                  style={{ background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})` }}
+                >
+                  Review regenerated lesson
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
