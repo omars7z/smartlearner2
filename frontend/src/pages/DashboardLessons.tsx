@@ -33,6 +33,7 @@ export default function DashboardLessons() {
   const [assessmentSubmitting, setAssessmentSubmitting] = useState(false)
   const [assessmentResult, setAssessmentResult] = useState<{ correct_count: number; total: number } | null>(null)
   const [followUpExplanation, setFollowUpExplanation] = useState<any>(null)
+  const [assessmentStatusMessage, setAssessmentStatusMessage] = useState<string | null>(null)
 
   const allLessons: { lesson: LessonDto; module: ModuleDto }[] = []
   syllabusModules.forEach((mod) => {
@@ -88,6 +89,7 @@ export default function DashboardLessons() {
     setAssessmentAnswers({})
     setAssessmentResult(null)
     setFollowUpExplanation(null)
+    setAssessmentStatusMessage(null)
   }, [displayLesson?.lesson_id])
 
   const renderSection = (section: LessonSection, idx: number) => {
@@ -436,6 +438,7 @@ export default function DashboardLessons() {
                               setAssessmentSubmitting(true)
                               setAssessmentResult(null)
                               setFollowUpExplanation(null)
+                              setAssessmentStatusMessage(null)
                               try {
                                 const answers = assessmentQuestions.map((q) => ({
                                   question_id: q.id,
@@ -449,6 +452,10 @@ export default function DashboardLessons() {
                                     : null
                                 )
                                 setFollowUpExplanation(resp.follow_up_explanation ?? null)
+                                const followup: any = resp.follow_up_explanation ?? null
+                                if (followup?.explanation?.core_explanation) {
+                                  setAssessmentStatusMessage(String(followup.explanation.core_explanation))
+                                }
 
                                 if (resp.next_action === 'advance_to_next_lesson') {
                                   const idx = allLessons.findIndex((x) => x.lesson.lesson_id === displayLesson.lesson_id)
@@ -459,10 +466,27 @@ export default function DashboardLessons() {
                                     setCurrentTopic((next.lesson as any).topic || next.lesson.lesson_id)
                                     setAssessmentOpen(false)
                                   }
+                                } else if (resp.next_action === 'retry_after_regeneration') {
+                                  // The backend regenerated lesson content; reload it immediately.
+                                  setContentLoading(true)
+                                  try {
+                                    const refreshed = await lessonsApi.getLesson(displayLesson.lesson_id, {
+                                      topic: resolvedTopic,
+                                      lessonTitle: displayLesson.title,
+                                      level,
+                                      durationMinutes: (displayLesson as any).duration_minutes ?? 20,
+                                    })
+                                    setLesson(refreshed.lesson)
+                                  } catch {
+                                    // keep current lesson view if refresh fails
+                                  } finally {
+                                    setContentLoading(false)
+                                  }
                                 }
                               } catch (err) {
                                 // eslint-disable-next-line no-console
                                 console.error(err)
+                                setAssessmentStatusMessage('Could not submit assessment. Please try again.')
                               } finally {
                                 setAssessmentSubmitting(false)
                               }
@@ -478,6 +502,12 @@ export default function DashboardLessons() {
                         {assessmentResult && assessmentResult.total > 0 && (
                           <div className="mt-4 text-sm" style={{ color: 'var(--text-primary)' }}>
                             Score: {assessmentResult.correct_count}/{assessmentResult.total}
+                          </div>
+                        )}
+
+                        {assessmentStatusMessage && (
+                          <div className="mt-3 text-sm text-amber-300 whitespace-pre-wrap">
+                            {assessmentStatusMessage}
                           </div>
                         )}
 

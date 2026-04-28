@@ -16,6 +16,7 @@ class LessonGeneratorAgent(AgentPair):
         *,
         level: str = "beginner",
         chapter_ref: int | None = None,
+        adaptation_instructions: str | None = None,
     ) -> dict:
         context = self.rag.retrieve_python_basics_context(topic, k=8)
         sanitized_topic = sanitize_prompt(topic)
@@ -27,6 +28,8 @@ class LessonGeneratorAgent(AgentPair):
         ]
         if chapter_ref is not None:
             scope_bits.append(f"Py4E chapter reference (for grounding): chapter {chapter_ref}")
+        if adaptation_instructions:
+            scope_bits.append(f"Adaptation instructions: {adaptation_instructions}")
         user_head = "\n".join(scope_bits)
         payload = self._generate_with_retries(
             model=self.settings.smart_model,

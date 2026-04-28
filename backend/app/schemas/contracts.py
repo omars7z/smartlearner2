@@ -82,3 +82,29 @@ class ResourceDto(BaseModel):
     description: str | None = None
     created_by_user_id: int | None = None
 
+
+class AssessmentAnswerDto(BaseModel):
+    question_index: int = Field(ge=0, le=4)
+    choice_index: int = Field(ge=0, le=3)
+
+
+class SubmitAssessmentRequest(BaseModel):
+    answers: list[AssessmentAnswerDto] = Field(default_factory=list, min_length=1, max_length=5)
+
+
+class QuickAssessmentGenerateRequest(BaseModel):
+    lesson_id: str
+    topic: str
+    level: str
+
+
+class QuickAssessmentGradeAnswerDto(BaseModel):
+    question_id: str
+    answer_index: int = Field(ge=0, le=3)
+
+
+class QuickAssessmentGradeRequest(BaseModel):
+    lesson_id: str
+    topic: str
+    answers: list[QuickAssessmentGradeAnswerDto] = Field(default_factory=list, min_length=1, max_length=5)
+

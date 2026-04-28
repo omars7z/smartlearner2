@@ -18,9 +18,15 @@ from app.services.agents import (
     SyllabusGeneratorAgent,
     SyllabusValidatorAgent,
 )
+from app.services.agents.syllabus_common import (
+    syllabus_allowed_topics_ordered,
+    syllabus_rubric_concepts_for_level,
+)
 from app.services.guardrails import run_exam_code_in_sandbox, sanitize_prompt
 from app.services.llm_client import LLMClient
 from app.services.rag_service import RAGService
+from app.services.assessment_service import AssessmentService
+from app.repositories.lesson_progress_repository import LessonProgressRepository
 
 from app.core.placement_rubric import (
     LEVEL_LABELS,
@@ -90,6 +96,81 @@ def _format_placement_question(
     }
 
 
+def _build_local_syllabus_payload(level: str) -> dict:
+    """Deterministic syllabus fallback when LLM output is missing/invalid."""
+    lvl = normalize_level(level)
+    topics = syllabus_allowed_topics_ordered(lvl)
+    concepts = syllabus_rubric_concepts_for_level(lvl)
+    concept_by_topic = {topics[i]: concepts[i] for i in range(min(len(topics), len(concepts)))}
+    if concepts:
+        concept_fallback = concepts[-1]
+    else:
+        concept_fallback = "Python fundamentals"
+
+    chapter_map = {
+        "beginner": [1, 2, 3, 6],
+        "intermediate": [4, 5, 7, 8, 9, 10],
+        "advanced": [11, 12, 13, 14],
+        "very_advanced": [15, 16],
+    }
+    chapter_titles = {
+        1: "Why we program",
+        2: "Variables, Expressions and Statements",
+        3: "Conditional execution",
+        4: "Functions",
+        5: "Iteration",
+        6: "Strings",
+        7: "Files",
+        8: "Lists",
+        9: "Dictionaries",
+        10: "Tuples",
+        11: "Regular Expressions",
+        12: "Networked Programs",
+        13: "Web Services",
+        14: "Object-Oriented Programming",
+        15: "Databases and SQL",
+        16: "Visualizing Data",
+    }
+    allowed_chapters = chapter_map.get(lvl, chapter_map["beginner"])
+    chunk = max(1, (len(topics) + len(allowed_chapters) - 1) // len(allowed_chapters))
+
+    units: list[dict] = []
+    idx = 0
+    for ch in allowed_chapters:
+        part = topics[idx : idx + chunk]
+        idx += chunk
+        if not part:
+            break
+        lessons: list[dict] = []
+        for t in part:
+            lessons.append(
+                {
+                    "topic": t,
+                    "lesson_title": f"Practical {t}",
+                    "description": (
+                        f"Learn {t} through practical Python exercises and small examples. "
+                        "Practice predictable coding patterns and explain your reasoning clearly."
+                    ),
+                    "learning_objectives": [
+                        f"Identify key ideas behind {t}.",
+                        f"Write a short Python example using {t}.",
+                        f"Debug common mistakes related to {t}.",
+                    ],
+                    "rubric_concept": concept_by_topic.get(t, concept_fallback),
+                    "chapter_ref": ch,
+                }
+            )
+        units.append(
+            {
+                "chapter": ch,
+                "title": chapter_titles.get(ch, f"Chapter {ch}"),
+                "summary": f"Core learning outcomes for {chapter_titles.get(ch, f'Chapter {ch}')}.",
+                "lessons": lessons,
+            }
+        )
+    return {"units": units}
+
+
 class OrchestratorService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -107,6 +188,8 @@ class OrchestratorService:
         self.lesson_validator = LessonValidatorAgent()
         self.qa_generator = QAGeneratorAgent(self.llm, self.rag)
         self.qa_validator = QAValidatorAgent()
+        self.assessment_service = AssessmentService(self.llm)
+        self.lesson_progress_repo = LessonProgressRepository(db)
 
     async def create_placement_test(self, user_id: int, level: str, question_count: int) -> dict:
         if question_count != QUESTIONS_PER_LEVEL:
@@ -433,6 +516,10 @@ class OrchestratorService:
             weak_topics=weak_topics,
             strong_topics=strong_topics,
         )
+        if not isinstance(raw_syllabus, dict) or (
+            not raw_syllabus.get("units") and not raw_syllabus.get("lessons")
+        ):
+            raw_syllabus = _build_local_syllabus_payload(level_str)
         await self.agent_repo.log_run(
             agent_name=self.syllabus_generator.name,
             stage="generate",
@@ -752,3 +839,141 @@ class OrchestratorService:
     async def run_exam_code(self, code: str) -> dict:
         result = run_exam_code_in_sandbox(code)
         return {"stdout": result.stdout, "stderr": result.stderr, "return_code": result.return_code}
+
+    async def generate_lesson_assessment(self, user_id: int, lesson_id: int) -> dict:
+        lesson = await self.course_repo.get_lesson_with_course(lesson_id)
+        if lesson is None:
+            raise ValueError("Lesson not found")
+        if lesson.course is None or lesson.course.user_id != user_id:
+            raise ValueError("Lesson not found")
+        progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
+        level = normalize_level((lesson.course.level or "beginner").replace(" ", "_").lower())
+        previous_questions = (
+            list(progress.current_questions_json)
+            if isinstance(progress.current_questions_json, list)
+            else []
+        )
+        questions = await self.assessment_service.generate_assessment(
+            topic=lesson.topic,
+            level=level,
+            lesson_title=lesson.title,
+            lesson_markdown=(lesson.markdown_content or ""),
+            attempt_number=max(1, progress.attempts + 1),
+            previous_questions=previous_questions,
+        )
+        for i, q in enumerate(questions):
+            q["id"] = f"q{i}"
+        progress.current_questions_json = questions
+        await self.lesson_progress_repo.save(progress)
+        return {
+            "lesson_id": f"lesson_{lesson.id}",
+            "attempts_used": progress.attempts,
+            "attempts_remaining": max(0, 3 - progress.attempts),
+            "questions": questions,
+        }
+
+    async def submit_lesson_assessment(
+        self,
+        user_id: int,
+        lesson_id: int,
+        answers: list[dict],
+    ) -> dict:
+        lesson = await self.course_repo.get_lesson_with_course(lesson_id)
+        if lesson is None:
+            raise ValueError("Lesson not found")
+        if lesson.course is None or lesson.course.user_id != user_id:
+            raise ValueError("Lesson not found")
+        progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
+        questions = progress.current_questions_json or []
+        if not isinstance(questions, list) or len(questions) != 5:
+            level = normalize_level((lesson.course.level or "beginner").replace(" ", "_").lower())
+            questions = await self.assessment_service.generate_assessment(
+                topic=lesson.topic,
+                level=level,
+                lesson_title=lesson.title,
+                lesson_markdown=(lesson.markdown_content or ""),
+                attempt_number=max(1, progress.attempts + 1),
+                previous_questions=[],
+            )
+            for i, q in enumerate(questions):
+                q["id"] = f"q{i}"
+            progress.current_questions_json = questions
+
+        answer_map: dict[int, int] = {}
+        for a in answers:
+            if not isinstance(a, dict):
+                continue
+            try:
+                qi = int(a.get("question_index"))
+                ci = int(a.get("choice_index"))
+            except (TypeError, ValueError):
+                continue
+            answer_map[qi] = ci
+
+        score = 0
+        for idx, q in enumerate(questions):
+            if idx not in answer_map:
+                continue
+            choices = q.get("choices") or []
+            ci = answer_map[idx]
+            if not isinstance(choices, list) or ci < 0 or ci >= len(choices):
+                continue
+            selected = str(choices[ci]).strip()
+            correct = str(q.get("correct_answer") or "").strip()
+            if selected == correct:
+                score += 1
+
+        progress.last_score = score
+        if score >= 4:
+            progress.passed = True
+            await self.lesson_progress_repo.save(progress)
+            next_lesson_id = await self.course_repo.get_next_lesson_id(lesson)
+            return {"passed": True, "score": score, "next_lesson": next_lesson_id}
+
+        # Failed attempt
+        if progress.attempts < 3:
+            progress.attempts += 1
+        attempt_number = progress.attempts
+        progress.passed = False
+
+        if attempt_number >= 3:
+            await self.lesson_progress_repo.save(progress)
+            return {
+                "passed": False,
+                "locked": True,
+                "score": score,
+                "attempts": progress.attempts,
+                "message": "You have reached the maximum attempts. Please review the lesson before retrying.",
+            }
+
+        adaptation = (
+            "Use simpler explanation, more examples, beginner-friendly style."
+            if attempt_number == 1
+            else "Use even simpler explanation, step-by-step breakdown, and focus on weak concepts."
+        )
+        level = normalize_level((lesson.course.level or "beginner").replace(" ", "_").lower())
+        chapter_ref = None
+        try:
+            if isinstance(lesson.metadata_json, dict):
+                cr = lesson.metadata_json.get("chapter_ref")
+                if cr is not None:
+                    chapter_ref = int(cr)
+        except Exception:
+            chapter_ref = None
+        raw_lesson = self.lesson_generator.generate(
+            topic=lesson.topic,
+            lesson_title=lesson.title,
+            level=level,
+            chapter_ref=chapter_ref,
+            adaptation_instructions=adaptation,
+        )
+        generated = self.lesson_validator.validate(raw_lesson)
+        await self.course_repo.update_lesson_content(lesson.id, generated["markdown"])
+        await self.lesson_progress_repo.save(progress)
+        return {
+            "passed": False,
+            "locked": False,
+            "score": score,
+            "attempts": progress.attempts,
+            "message": f"Assessment failed. Lesson regenerated for attempt {attempt_number + 1}.",
+        }

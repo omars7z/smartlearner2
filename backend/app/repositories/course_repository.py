@@ -65,3 +65,28 @@ class CourseRepository:
         await self.db.commit()
         await self.db.refresh(lesson)
         return lesson
+
+    async def get_lesson(self, lesson_id: int) -> Lesson | None:
+        return await self.db.get(Lesson, lesson_id)
+
+    async def get_lesson_with_course(self, lesson_id: int) -> Lesson | None:
+        q = (
+            select(Lesson)
+            .options(selectinload(Lesson.course))
+            .where(Lesson.id == lesson_id)
+        )
+        res = await self.db.execute(q)
+        return res.scalar_one_or_none()
+
+    async def get_next_lesson_id(self, lesson: Lesson) -> int | None:
+        q = (
+            select(Lesson.id)
+            .where(
+                Lesson.course_id == lesson.course_id,
+                Lesson.order_index > lesson.order_index,
+            )
+            .order_by(Lesson.order_index.asc())
+            .limit(1)
+        )
+        res = await self.db.execute(q)
+        return res.scalar_one_or_none()
