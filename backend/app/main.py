@@ -32,6 +32,8 @@ async def _ensure_users_table_columns(conn) -> None:
 
     if "role" not in existing_cols:
         await conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'student' NOT NULL"))
+    if "is_active" not in existing_cols:
+        await conn.execute(text("ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT 1 NOT NULL"))
 
 
 async def _ensure_lessons_table_columns(conn) -> None:
@@ -46,6 +48,8 @@ async def _ensure_lessons_table_columns(conn) -> None:
         await conn.execute(text("ALTER TABLE lessons ADD COLUMN unit_title VARCHAR(255)"))
     if "metadata_json" not in existing_cols:
         await conn.execute(text("ALTER TABLE lessons ADD COLUMN metadata_json TEXT DEFAULT '{}'"))
+    if "prerequisites_json" not in existing_cols:
+        await conn.execute(text("ALTER TABLE lessons ADD COLUMN prerequisites_json TEXT DEFAULT '[]'"))
 
 
 @asynccontextmanager
@@ -70,7 +74,6 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "http://localhost:5174",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:8080",

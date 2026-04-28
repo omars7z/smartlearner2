@@ -72,6 +72,18 @@ def _score_to_level(pct: int) -> str:
     return "advanced"
 
 
+def _is_dynamic_lesson_markdown(markdown: str) -> bool:
+    """
+    Heuristic to detect rich/generated lesson content versus short seed text.
+    Seed syllabus descriptions are usually short paragraphs without sections/code.
+    """
+    md = (markdown or "").strip()
+    if not md:
+        return False
+    has_structure = "## " in md or "### " in md or "```" in md
+    return has_structure and len(md) >= 220
+
+
 def _format_placement_question(
     q: dict,
     index_in_level: int,
@@ -646,6 +658,23 @@ class OrchestratorService:
         if lesson is None:
             raise ValueError("Lesson not found")
 
+        # Serve persisted lesson content first. This preserves adapted lesson
+        # variants generated after failed assessments instead of overwriting them
+        # on every lesson view refresh.
+        existing_markdown = (lesson.markdown_content or "").strip()
+        if existing_markdown and _is_dynamic_lesson_markdown(existing_markdown):
+            return {
+                "status": "success",
+                "lesson": {
+                    "lesson_id": f"lesson_{lesson.id}",
+                    "title": lesson.title,
+                    "duration_minutes": 25,
+                    "sections": [{"type": "markdown", "content": existing_markdown}],
+                },
+                "generated_in_ms": 0,
+                "llm_used": False,
+            }
+
         # Get level from parent course
         level: str = "beginner"
         chapter_ref: int | None = None
@@ -968,7 +997,20 @@ class OrchestratorService:
             adaptation_instructions=adaptation,
         )
         generated = self.lesson_validator.validate(raw_lesson)
-        await self.course_repo.update_lesson_content(lesson.id, generated["markdown"])
+        regenerated_markdown = str(generated.get("markdown") or "")
+        await self.course_repo.update_lesson_content(lesson.id, regenerated_markdown)
+        # Immediately prepare a fresh assessment set from the regenerated lesson content.
+        new_questions = await self.assessment_service.generate_assessment(
+            topic=lesson.topic,
+            level=level,
+            lesson_title=lesson.title,
+            lesson_markdown=regenerated_markdown,
+            attempt_number=max(1, progress.attempts + 1),
+            previous_questions=questions if isinstance(questions, list) else [],
+        )
+        for i, q in enumerate(new_questions):
+            q["id"] = f"q{i}"
+        progress.current_questions_json = new_questions
         await self.lesson_progress_repo.save(progress)
         return {
             "passed": False,

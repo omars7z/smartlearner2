@@ -34,7 +34,6 @@ class PlacementSubmissionRequest(BaseModel):
 
 class PlacementStartRequest(BaseModel):
     """Dashboard placement flow: one question at a time."""
-
     track: str = "python"
 
 

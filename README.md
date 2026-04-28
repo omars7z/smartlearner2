@@ -24,6 +24,12 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 API base: `http://localhost:8000` — OpenAPI docs at `/docs`. Health check: `GET /health`.
 
+### Backend env notes
+
+- `GROQ_API_KEY` is the primary key used by backend LLM calls.
+- `GROQ_API_KEY_VALIDATORS` is optional for validator-only calls; if omitted, validators use `GROQ_API_KEY`.
+- Gemini is not used as an LLM fallback in the backend runtime.
+
 ### Frontend
 
 ```bash
@@ -46,6 +52,13 @@ docker compose up --build
 - **Frontend (nginx):** `http://localhost:8080`
 
 The database file is stored in a Docker volume at `/data` inside the backend container (`DATABASE_URL` is set in `docker-compose.yml`). RAG assets ship from `backend/vector_db` in the image.
+
+## Lesson and assessment behavior
+
+- Lessons are generated dynamically and stored in the database.
+- Quick Assessment uses 5 MCQ questions per attempt.
+- If an attempt fails (below pass threshold), lesson content is regenerated with adaptation guidance and a fresh 5-question set is prepared from the updated lesson content.
+- Adapted lesson content is preserved for retries instead of being overwritten on every lesson page refresh.
 
 ## Project layout
 

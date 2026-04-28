@@ -372,7 +372,7 @@ export default function DashboardLessons() {
                     <div className="flex items-center gap-2 mb-3">
                       <ClipboardCheck className="h-5 w-5 text-sky-400" />
                       <h2 className="text-base font-semibold text-[color:var(--text-primary)]">
-                        Quick Assessment (3 questions)
+                        Quick Assessment (5 questions)
                       </h2>
                     </div>
 
@@ -489,6 +489,14 @@ export default function DashboardLessons() {
                                       durationMinutes: (displayLesson as any).duration_minutes ?? 20,
                                     })
                                     setLesson(refreshed.lesson)
+                                    // Load the freshly regenerated 5-question set from updated lesson content.
+                                    const regenerated = await quickAssessmentApi.generate(
+                                      displayLesson.lesson_id,
+                                      resolvedTopic,
+                                      level,
+                                    )
+                                    setAssessmentQuestions(regenerated.questions || [])
+                                    setAssessmentAnswers({})
                                   } catch {
                                     // keep current lesson view if refresh fails
                                   } finally {
