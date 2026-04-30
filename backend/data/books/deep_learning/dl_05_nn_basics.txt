@@ -1,6 +1,7 @@
 TRACK: Deep Learning
 CHAPTER: dl_05_nn_basics
 TITLE: Neural Network Fundamentals
+SOURCE: Deep Learning (Goodfellow, Bengio, Courville) - https://www.deeplearningbook.org/
 ---
 A neural network stacks layers that transform inputs into richer representations. Each dense layer computes an affine transformation followed by a non-linear activation. Without non-linearity, stacked linear layers collapse into a single linear function.
 

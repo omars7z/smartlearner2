@@ -10,7 +10,7 @@ from app.services.rag_service import RAGService
 
 
 class SyllabusGeneratorAgent(AgentPair):
-    """LLM + RAG: generates a personalized syllabus aligned to placement level and PY4E rubric."""
+    """LLM + RAG: generates a personalized syllabus aligned to level and selected-track rubric."""
 
     name = "syllabus-generator"
 
@@ -28,6 +28,7 @@ class SyllabusGeneratorAgent(AgentPair):
     ) -> dict:
         lvl = normalize_level(level)
         track_key = (track or "python").strip().lower().replace("-", "_")
+        is_dl = track_key in {"deep_learning", "dl"}
         allowed_topics = syllabus_allowed_topics_ordered(lvl, track=track_key)
         rubric_concepts = syllabus_rubric_concepts_for_level(lvl, track=track_key)
         scope = chapter_scope_for_level(lvl, track=track_key)
@@ -65,53 +66,69 @@ class SyllabusGeneratorAgent(AgentPair):
                 "Do NOT include content from lower levels. "
                 "Return JSON with top-level key \"units\" (array). Do NOT return flat lessons[] only. "
                 "\n\n"
-                "STRUCTURE — mirror the exact PY4E chapter structure: "
-                "Each unit = one PY4E chapter. "
-                "Each unit MUST have: "
-                "\"chapter\" (int — PY4E chapter number e.g. 2); "
-                "\"title\" (string — exact PY4E chapter title e.g. 'Variables, Expressions and Statements'); "
-                "\"summary\" (one sentence: what the learner achieves in this chapter); "
-                "\"lessons\" (array of sub-lessons, MINIMUM 4 per chapter). "
-                "\n\n"
-                "Each sub-lesson MUST have: "
-                "\"topic\" — copied EXACTLY from the allowed topic list (no changes, no paraphrasing); "
-                "\"lesson_title\" — specific and engaging, NOT just the topic name "
-                "(e.g. 'Storing and Naming Values' not 'Variables'); "
-                "\"description\" — 2-3 sentences: concept taught, what learner practices, measurable outcome; "
-                "\"learning_objectives\" — list of 3-5 strings starting with action verbs "
-                "(Identify, Write, Use, Explain, Debug, Apply, Distinguish); "
-                "\"rubric_concept\" — exact match from the rubric_concepts list provided; "
-                "\"chapter_ref\" (int — the PY4E chapter number this sub-lesson belongs to). "
-                "\n\n"
-                "COMPREHENSIVENESS RULES: "
-                "Minimum 4 sub-lessons per chapter — if a chapter has more major concepts, add more. "
-                "Every description must be grounded in the RAG context provided — no generic filler. "
-                "learning_objectives must reflect what a student at THIS level genuinely needs to master. "
-                "Each chapter unit must feel self-contained so a student can finish it and move on confidently. "
-                "\n\n"
-                "ORDER RULES: "
-                "Units must appear in ascending chapter number order. "
-                "Within Ch 2, sub-lesson for 'Expressions' must come before 'Variable Assignment'. "
-                "\n\n"
-                "STRICT SCOPE: "
-                "Generate ONLY content from the allowed chapters for this level. "
-                "Do NOT introduce any topic, syntax, or concept from other levels or chapters. "
-                "rubric_concept must exactly match one entry from the rubric_concepts list — do not invent."
-                "\n\n"
-                "PERSONALIZATION RULES: "
-                "You will receive STUDENT WEAK CONCEPTS and STUDENT STRONG CONCEPTS in the user message. "
-                "For weak concepts: add more sub-lessons, more detailed descriptions, "
-                "and more learning_objectives focused on that concept. "
-                "For strong concepts: keep coverage concise — one sub-lesson is enough, "
-                "shorter description, fewer objectives. "
-                "Never skip a required topic — just adjust depth. "
+                + (
+                    "STRUCTURE — mirror the Deep Learning track chapter structure. "
+                    if is_dl
+                    else "STRUCTURE — mirror the exact PY4E chapter structure. "
+                )
+                + ("Each unit = one Deep Learning chapter. " if is_dl else "Each unit = one PY4E chapter. ")
+                + "Each unit MUST have: "
+                + (
+                    "\"chapter\" (int — Deep Learning chapter number e.g. 5); "
+                    "\"title\" (string — exact Deep Learning chapter title for this track); "
+                    if is_dl
+                    else "\"chapter\" (int — PY4E chapter number e.g. 2); "
+                    "\"title\" (string — exact PY4E chapter title e.g. 'Variables, Expressions and Statements'); "
+                )
+                + "\"summary\" (one sentence: what the learner achieves in this chapter); "
+                + "\"lessons\" (array of sub-lessons, MINIMUM 4 per chapter). "
+                + "\n\n"
+                + "Each sub-lesson MUST have: "
+                + "\"topic\" — copied EXACTLY from the allowed topic list (no changes, no paraphrasing); "
+                + "\"lesson_title\" — specific and engaging, NOT just the topic name "
+                + "(e.g. 'Storing and Naming Values' not 'Variables'); "
+                + "\"description\" — 2-3 sentences: concept taught, what learner practices, measurable outcome; "
+                + "\"learning_objectives\" — list of 3-5 strings starting with action verbs "
+                + "(Identify, Write, Use, Explain, Debug, Apply, Distinguish); "
+                + "\"rubric_concept\" — exact match from the rubric_concepts list provided; "
+                + (
+                    "\"chapter_ref\" (int — the Deep Learning chapter number this sub-lesson belongs to). "
+                    if is_dl
+                    else "\"chapter_ref\" (int — the PY4E chapter number this sub-lesson belongs to). "
+                )
+                + "\n\n"
+                + "COMPREHENSIVENESS RULES: "
+                + "Minimum 4 sub-lessons per chapter — if a chapter has more major concepts, add more. "
+                + "Every description must be grounded in the RAG context provided — no generic filler. "
+                + "learning_objectives must reflect what a student at THIS level genuinely needs to master. "
+                + "Each chapter unit must feel self-contained so a student can finish it and move on confidently. "
+                + "\n\n"
+                + "ORDER RULES: "
+                + "Units must appear in ascending chapter number order. "
+                + (
+                    "Within Ch 2, sub-lesson for 'Expressions' must come before 'Variable Assignment'. "
+                    if not is_dl
+                    else ""
+                )
+                + "\n\n"
+                + "STRICT SCOPE: "
+                + "Generate ONLY content from the allowed chapters for this level. "
+                + "Do NOT introduce any topic, syntax, or concept from other levels or chapters. "
+                + "rubric_concept must exactly match one entry from the rubric_concepts list — do not invent."
+                + "\n\n"
+                + "PERSONALIZATION RULES: "
+                + "You will receive STUDENT WEAK CONCEPTS and STUDENT STRONG CONCEPTS in the user message. "
+                + "For weak concepts: add more sub-lessons, more detailed descriptions, "
+                + "and more learning_objectives focused on that concept. "
+                + "For strong concepts: keep coverage concise — one sub-lesson is enough, "
+                + "shorter description, fewer objectives. "
+                + "Never skip a required topic — just adjust depth. "
             ),
             user_prompt=(
                 f"Student placement level: {lvl}.\n"
                 f"Track: {track_key}.\n"
                 f"STRICT SCOPE: generate syllabus for {lvl} level ONLY — do not include any other level.\n"
                 f"Allowed chapters: {scope}.\n\n"
-                f"PY4E chapter structure for {lvl} (use as backbone — one unit per chapter):\n"
                 + chapter_structure_hint(lvl, track=track_key)
                 + f"\n\nAllowed topic strings (copy EXACTLY, use every one exactly once across all units):\n{allowed_txt}\n\n"
                 f"Rubric concepts in order (map each sub-lesson to its closest matching concept):\n{concepts_txt}\n\n"

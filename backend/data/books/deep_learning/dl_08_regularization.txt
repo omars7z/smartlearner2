@@ -1,6 +1,7 @@
 TRACK: Deep Learning
 CHAPTER: dl_08_regularization
 TITLE: Generalization and Regularization
+SOURCE: Deep Learning (Goodfellow, Bengio, Courville) - https://www.deeplearningbook.org/
 ---
 Generalization is performance on unseen data, not just training batches. Overfitting appears when training loss drops but validation loss rises. Regularization techniques reduce overfitting by constraining model behavior.
 

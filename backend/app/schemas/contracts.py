@@ -25,6 +25,7 @@ class LoginRequest(BaseModel):
 class PlacementGenerationRequest(BaseModel):
     level: str = "beginner"
     question_count: int = Field(default=5, ge=5, le=5)
+    track: str = "python"
 
 
 class PlacementSubmissionRequest(BaseModel):

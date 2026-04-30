@@ -282,6 +282,10 @@ export const curriculumApi = {
     const res = await api.get<Py4eCurriculumPayload>('/curriculum/py4e')
     return res.data
   },
+  async getDeepLearning() {
+    const res = await api.get<Py4eCurriculumPayload>('/curriculum/deep-learning')
+    return res.data
+  },
 }
 
 // Lessons content (from backend / seed_content)

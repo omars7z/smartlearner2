@@ -1,6 +1,7 @@
 TRACK: Deep Learning
 CHAPTER: dl_02_python
 TITLE: Python for Deep Learning
+SOURCE: Deep Learning (Goodfellow, Bengio, Courville) - https://www.deeplearningbook.org/
 ---
 Python deep learning workflows commonly use NumPy-style tensors and framework tensors. A tensor is a multi-dimensional array with a data type and shape. You should inspect shape at every major step, especially after reshaping, batching, and flattening. Shape mistakes are one of the most common causes of training failures.
 

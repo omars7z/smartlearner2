@@ -1,6 +1,7 @@
 TRACK: Deep Learning
 CHAPTER: dl_06_backprop
 TITLE: Backpropagation
+SOURCE: Deep Learning (Goodfellow, Bengio, Courville) - https://www.deeplearningbook.org/
 ---
 Backpropagation computes gradients of loss with respect to parameters by applying chain rule from output to input layers. The backward pass reuses intermediate values from the forward pass. Automatic differentiation tools build this gradient graph for most operations.
 

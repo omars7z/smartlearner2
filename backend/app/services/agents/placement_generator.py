@@ -12,15 +12,18 @@ from app.services.rag_service import RAGService
 
 # Edit these strings to experiment with placement quality; one MCQ per LLM call (per rubric slot).
 PLACEMENT_MCQ_SYSTEM_PROMPT = (
-    "Placement MCQ generator for Python for Everybody (University of Michigan). "
+    "Placement MCQ generator aligned to the selected track's source material. "
     "You will receive a rubric_concept in the user message — generate ONE question for THAT concept ONLY. "
     "Do NOT introduce concepts, syntax, or ideas from other levels or chapters. "
-    "Allowed scope per level: "
-    "beginner = Ch 1-3 and Ch 6 only (variables, expressions, conditionals, strings, basic I/O, errors). "
-    "intermediate = Ch 4-5 and Ch 7-10 (functions, loops, files, lists, dictionaries, tuples). "
-    "advanced = Ch 11-13 (regex, networking, web services, data parsing). "
-    "very_advanced = Ch 14-16 (OOP, databases, visualization). "
-    "Never use self, classes, asyncio, SQL, APIs, or OOP concepts for beginner level. "
+#   "Allowed scope per level: "
+#     "beginner = Ch 1-3 and Ch 6 only (variables, expressions, conditionals, strings, basic I/O, errors). "
+#     "intermediate = Ch 4-5 and Ch 7-10 (functions, loops, files, lists, dictionaries, tuples). "
+#     "advanced = Ch 11-13 (regex, networking, web services, data parsing). "
+#     "very_advanced = Ch 14-16 (OOP, databases, visualization). "
+#     "Never use self, classes, asyncio, SQL, APIs, or OOP concepts for beginner level. 
+    "Allowed scope per level is provided dynamically in the prompt payload for the selected track. "
+    "Strictly follow that dynamic scope and the ordered rubric_concepts list. "
+    "For beginner level, avoid advanced framework/system-design topics unless explicitly included in scope. "
     "Return JSON only: question (string), choices (array of exactly 4 distinct strings), "
     "correct_answer (must exactly match one of choices), concept (copy rubric_concept verbatim). "
     "Test conceptual understanding, not memorization or trivia. "
@@ -70,7 +73,7 @@ def _extract_question_obj(payload: dict) -> dict | None:
 
 
 class PlacementGeneratorAgent(AgentPair):
-    """LLM + RAG: MCQs aligned to the placement rubric (Python for Everybody scope)."""
+    """LLM + RAG: MCQs aligned to the selected track placement rubric."""
 
     def __init__(self, llm: LLMClient, rag: RAGService):
         super().__init__("placement-generator", llm)
@@ -98,8 +101,12 @@ class PlacementGeneratorAgent(AgentPair):
             if not (isinstance(system_prompt, str) and system_prompt.strip())
             else system_prompt.strip()
         )
+        if track_key in {"deep_learning", "dl"}:
+            source_label = "Deep Learning (Goodfellow, Bengio, Courville; MIT Press, https://www.deeplearningbook.org/)"
+        else:
+            source_label = "Python for Everybody (University of Michigan)"
         sys_prompt = (
-            f"Track: {track_key}. " + sys_prompt
+            f"Track: {track_key}. Source material: {source_label}. " + sys_prompt
             + f"\n\nTrack: {track_key}."
             + f"\n\nLevel scope: {chapter_scope_for_level(lvl, track=track_key)}."
             + "\n\nAllowed concepts for this level (one per question slot, in order):\n"

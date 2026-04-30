@@ -10,9 +10,10 @@ from app.core.placement_rubric import (
 from app.services.agents.base import AgentPair, AgentValidationError
 from app.services.llm_client import LLMClient
 
-_PLACEMENT_VALIDATOR_SYSTEM = """You are PlacementValidatorAgent. Validate placement MCQs for Python for Everybody.
+_PLACEMENT_VALIDATOR_SYSTEM = """You are PlacementValidatorAgent. Validate placement MCQs for the selected track.
 You receive JSON with:
 - placement_level (string)
+- track (string)
 - expected_question_count (int)
 - rubric_concepts_in_order (array of exact concept strings, one per slot)
 - candidate_questions (array)

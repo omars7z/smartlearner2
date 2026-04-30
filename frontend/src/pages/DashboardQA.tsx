@@ -41,6 +41,15 @@ export default function DashboardQA() {
   const STORAGE_KEY = 'smartlearner-qa-messages'
   const [waitingForAnswer, setWaitingForAnswer] = useState(false)
   const [currentQuickCheck, setCurrentQuickCheck] = useState<ExplanationPayload['quick_check'] | null>(null)
+  const selectedTrack = (() => {
+    try {
+      const t = (localStorage.getItem('current_track') || 'python').toLowerCase().replace(/-/g, '_')
+      return t === 'deep_learning' ? 'deep_learning' : 'python'
+    } catch {
+      return 'python'
+    }
+  })()
+  const sourceLabel = selectedTrack === 'deep_learning' ? 'Deep Learning' : 'Python for Everybody'
 
   // Load persisted chat on first mount
   useEffect(() => {
@@ -111,8 +120,9 @@ export default function DashboardQA() {
         student_id: studentId,
         mastery_level: masteryLevel,
         knowledge_map: knowledgeMap,
+        track: selectedTrack,
       }
-      // Course-wide Q&A: do not scope by current_topic; backend uses RAG + Python for Everybody grounding.
+      // Course-wide Q&A: do not scope by current_topic; backend uses RAG grounded to selected track.
       const data = await qaApi.ask(q, undefined, studentContext)
       const result = data.result ?? {}
       const rag = (result.rag ?? {}) as Record<string, unknown>
@@ -215,8 +225,8 @@ export default function DashboardQA() {
           <div className="min-w-0 flex-1">
             <h1 className="text-lg font-semibold text-[color:var(--text-primary)]">Ask AI Agents</h1>
             <p className="text-xs text-[color:var(--text-muted)] mt-1 max-w-xl">
-              Answers are grounded in <span className="text-[color:var(--text-secondary)]">Python for Everybody</span>{' '}
-              (University of Michigan / Coursera open materials at py4e.com, via RAG)—ask anything covered there.
+              Answers are grounded in <span className="text-[color:var(--text-secondary)]">{sourceLabel}</span>{' '}
+              via RAG for your selected track - ask anything covered there.
             </p>
             <div className="flex flex-wrap gap-1.5 mt-2">
               {['MCP', 'RAG', 'Explain', 'Validate', 'Analytics'].map((label) => (
@@ -240,7 +250,7 @@ export default function DashboardQA() {
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
           <p className="text-center text-[color:var(--text-muted)] py-8 max-w-md mx-auto">
-            Ask about Python concepts, syntax, and examples as presented in the course text. Analytics still sync from your session when available.
+            Ask about concepts and examples from your selected track materials. Analytics still sync from your session when available.
           </p>
         )}
         {messages.map((m, idx) => (

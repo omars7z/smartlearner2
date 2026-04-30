@@ -17,7 +17,7 @@ from app.services.agents.syllabus_common import (
 )
 from app.services.llm_client import LLMClient
 
-_SYLLABUS_VALIDATOR_SYSTEM = """You are SyllabusValidatorAgent for Python for Everybody.
+_SYLLABUS_VALIDATOR_SYSTEM = """You are SyllabusValidatorAgent for the selected learning track.
 You receive JSON with:
 - placement_level (string)
 - chapter_scope (string)
@@ -281,9 +281,14 @@ class SyllabusValidatorAgent(AgentPair):
         }
 
         try:
+            source_note = (
+                "Deep Learning textbook (Goodfellow/Bengio/Courville) at https://www.deeplearningbook.org/"
+                if normalize_track(track_key) in {"deep_learning", "dl"}
+                else "Python for Everybody source material"
+            )
             out = self._generate_with_retries(
                 model=self.settings.fast_model,
-                system_prompt=_SYLLABUS_VALIDATOR_SYSTEM,
+                system_prompt=_SYLLABUS_VALIDATOR_SYSTEM + f"\nTrack source note: {source_note}.",
                 user_prompt=json.dumps(validation_input, ensure_ascii=False),
             )
             if not isinstance(out, dict) or not out.get("valid"):

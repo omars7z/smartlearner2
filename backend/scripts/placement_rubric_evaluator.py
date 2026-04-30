@@ -12,8 +12,8 @@ from app.core.config import get_settings
 from app.services.guardrails import safe_json_loads
 from app.services.llm_client import LLMClient
 
-_SYSTEM = """You evaluate a batch of placement multiple-choice questions for Python (Python for Everybody / university-style foundations).
-You receive JSON with: placement_level, scale (integer max score per criterion), criteria (array of {id, name, description}), questions (array of objects with question, choices, correct_answer, concept).
+_SYSTEM = """You evaluate a batch of placement multiple-choice questions for the selected track.
+You receive JSON with: placement_level, track, source_note, scale (integer max score per criterion), criteria (array of {id, name, description}), questions (array of objects with question, choices, correct_answer, concept).
 
 Return JSON only, with this exact shape:
 {
@@ -45,6 +45,7 @@ def evaluate_placement_questions(
     llm: LLMClient,
     *,
     level: str,
+    track: str = "python",
     questions: list[dict],
     rubric: dict,
 ) -> dict:
@@ -53,8 +54,16 @@ def evaluate_placement_questions(
     if scale < 2:
         scale = 5
 
+    track_key = (track or "python").strip().lower().replace("-", "_")
+    source_note = (
+        "Deep Learning (Goodfellow, Bengio, Courville; MIT Press, https://www.deeplearningbook.org/)"
+        if track_key in {"deep_learning", "dl"}
+        else "Python for Everybody (University of Michigan / Coursera)"
+    )
     payload = {
         "placement_level": level,
+        "track": track_key,
+        "source_note": source_note,
         "scale": scale,
         "criteria": rubric.get("criteria", []),
         "questions": questions,

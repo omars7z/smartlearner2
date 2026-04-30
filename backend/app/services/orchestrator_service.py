@@ -76,27 +76,34 @@ class OrchestratorService:
         self.assessment_service = AssessmentService(self.llm)
         self.lesson_progress_repo = LessonProgressRepository(db)
 
-    async def create_placement_test(self, user_id: int, level: str, question_count: int) -> dict:
+    async def create_placement_test(
+        self,
+        user_id: int,
+        level: str,
+        question_count: int,
+        track: str = "python",
+    ) -> dict:
         if question_count != QUESTIONS_PER_LEVEL:
             raise ValueError(
                 f"Placement must use exactly {QUESTIONS_PER_LEVEL} questions per rubric tier (got {question_count})."
             )
-        raw = self.placement_generator.generate(level=level, question_count=question_count, track="python")
+        norm_track = normalize_track(track)
+        raw = self.placement_generator.generate(level=level, question_count=question_count, track=norm_track)
         await self.agent_repo.log_run(
             agent_name=self.placement_generator.name,
             stage="generate",
-            input_json={"level": level, "question_count": question_count, "flow": "generate"},
+            input_json={"level": level, "question_count": question_count, "track": norm_track, "flow": "generate"},
             output_json=raw,
             is_valid=True,
             user_id=user_id,
         )
         try:
-            generated = self.placement_validator.validate(raw, level, question_count, track="python")
+            generated = self.placement_validator.validate(raw, level, question_count, track=norm_track)
         except AgentValidationError as exc:
             await self.agent_repo.log_run(
                 agent_name=self.placement_validator.name,
                 stage="validate",
-                input_json={"level": level, "question_count": question_count},
+                input_json={"level": level, "question_count": question_count, "track": norm_track},
                 output_json={"error": str(exc)},
                 is_valid=False,
                 user_id=user_id,
@@ -105,7 +112,7 @@ class OrchestratorService:
         await self.agent_repo.log_run(
             agent_name=self.placement_validator.name,
             stage="validate",
-            input_json={"level": level, "question_count": question_count},
+            input_json={"level": level, "question_count": question_count, "track": norm_track},
             output_json=generated,
             is_valid=True,
             user_id=user_id,
@@ -617,7 +624,7 @@ class OrchestratorService:
             user_id=user_id,
         )
         try:
-            generated = self.lesson_validator.validate(raw_lesson)
+            generated = self.lesson_validator.validate(raw_lesson, track=course_track)
         except AgentValidationError as exc:
             await self.agent_repo.log_run(
                 agent_name=self.lesson_validator.name,
@@ -660,8 +667,10 @@ class OrchestratorService:
         from app.models.entities import Lesson
 
         safe_q = sanitize_prompt(question)
+        track_from_ctx = student_context.get("track") if isinstance(student_context, dict) else None
+        track_key = normalize_track(track_from_ctx)
         if not self.rag.is_likely_book_related_question(safe_q):
-            return self._qa_py4e_only_envelope()
+            return self._qa_track_scope_envelope(track_key)
 
         lesson_markdown = ""
         if lesson_id is not None and lesson_id != 0:
@@ -676,9 +685,13 @@ class OrchestratorService:
                 lesson_markdown + f"\n\nStudent context: {json.dumps(student_context, ensure_ascii=False)}"
             ).strip()
         if not lesson_markdown:
-            lesson_markdown = "General Python Foundations (Python Basics)."
+            lesson_markdown = (
+                "General Deep Learning Foundations."
+                if track_key in {"deep_learning", "dl"}
+                else "General Python Foundations (Python Basics)."
+            )
 
-        raw_qa = self.qa_generator.generate(question=question, lesson_markdown=lesson_markdown)
+        raw_qa = self.qa_generator.generate(question=question, lesson_markdown=lesson_markdown, track=track_key)
         await self.agent_repo.log_run(
             agent_name=self.qa_generator.name,
             stage="generate",
@@ -692,7 +705,7 @@ class OrchestratorService:
             user_id=user_id,
         )
         try:
-            generated = self.qa_validator.validate(raw_qa)
+            generated = self.qa_validator.validate(raw_qa, track=track_key)
         except AgentValidationError as exc:
             await self.agent_repo.log_run(
                 agent_name=self.qa_validator.name,
@@ -721,12 +734,18 @@ class OrchestratorService:
         )
         return self._qa_envelope(generated)
 
-    def _qa_py4e_only_envelope(self) -> dict:
-        """No LLM call: question looks unrelated to PY4E book chunks (saves tokens)."""
-        msg = (
-            "I'm only the **Python for Everybody (PY4E)** chatbot for this course—I help with the book material "
-            "and your lessons. Ask something about PY4E or the topics in your course."
-        )
+    def _qa_track_scope_envelope(self, track: str) -> dict:
+        """No LLM call: question looks unrelated to selected-track chunks (saves tokens)."""
+        if normalize_track(track) in {"deep_learning", "dl"}:
+            msg = (
+                "I'm only the **Deep Learning** chatbot for this course - I help with deep learning "
+                "book and lecture-note material plus your lessons. Ask something about deep learning topics."
+            )
+        else:
+            msg = (
+                "I'm only the **Python for Everybody (PY4E)** chatbot for this course - I help with the "
+                "book material and your lessons. Ask something about PY4E or your course topics."
+            )
         return {
             "status": "ok",
             "intent": "qa_py4e_scope",
@@ -883,7 +902,10 @@ class OrchestratorService:
             chapter_ref=chapter_ref,
             adaptation_instructions=adaptation,
         )
-        generated = self.lesson_validator.validate(raw_lesson)
+        generated = self.lesson_validator.validate(
+            raw_lesson,
+            track=_track_from_course_title(getattr(lesson.course, "title", None)),
+        )
         regenerated_markdown = str(generated.get("markdown") or "")
         await self.course_repo.update_lesson_content(lesson.id, regenerated_markdown)
         # Immediately prepare a fresh assessment set from the regenerated lesson content.

@@ -14,10 +14,21 @@ def _qa_source_grounding_suffix() -> str:
 class QAValidatorAgent:
     name = "qa-validator"
 
-    def validate(self, payload: dict) -> dict:
+    def validate(self, payload: dict, track: str = "python") -> dict:
+        track_key = (track or "python").strip().lower().replace("-", "_")
+        if track_key in {"deep_learning", "dl"}:
+            required_substring = "deep learning"
+            source_suffix = (
+                "\n\n(Source grounding: Deep Learning (Goodfellow, Bengio, Courville; MIT Press); "
+                "resource: https://www.deeplearningbook.org/; "
+                "scope: deep learning lecture-note style foundations and practical modeling concepts.)"
+            )
+        else:
+            required_substring = "python for everybody"
+            source_suffix = _qa_source_grounding_suffix()
         answer = str(payload.get("answer", ""))
         if has_python3_hallucinations(answer):
             raise AgentValidationError("Hallucinated Python 2-only functions detected.")
-        if "python for everybody" not in answer.lower():
-            payload["answer"] = answer.rstrip() + _qa_source_grounding_suffix()
+        if required_substring not in answer.lower():
+            payload["answer"] = answer.rstrip() + source_suffix
         return payload

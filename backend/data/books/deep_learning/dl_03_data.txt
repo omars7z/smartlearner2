@@ -1,6 +1,7 @@
 TRACK: Deep Learning
 CHAPTER: dl_03_data
 TITLE: Data Pipelines and Splits
+SOURCE: Deep Learning (Goodfellow, Bengio, Courville) - https://www.deeplearningbook.org/
 ---
 Data quality controls model quality. A robust pipeline defines training, validation, and test splits before model tuning. Validation is used for model selection and hyperparameter tuning. Test data should remain untouched until final evaluation.
 
