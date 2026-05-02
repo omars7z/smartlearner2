@@ -18,6 +18,11 @@ try:
 except Exception:  # pragma: no cover
     genai = None
 
+try:
+    import requests
+except Exception:  # pragma: no cover
+    requests = None
+
 
 class LLMClientError(RuntimeError):
     """Raised when placement (and other agent-only paths) need Groq but it is unavailable."""
@@ -134,6 +139,84 @@ class LLMClient:
                 except LLMClientError:
                     pass
             return self._mock_json(system_prompt, user_prompt, self.use_validator_key)
+
+    def generate_json_via_ollama(self, model: str, system_prompt: str, user_prompt: str) -> str:
+        """Q&A via Ollama: OpenAI-compatible ``/v1/chat/completions`` (local), or native ``/api/chat`` (ollama.com)."""
+        if requests is None:
+            raise LLMClientError("Install requests for Ollama QA: pip install requests")
+        base = (self.settings.ollama_base_url or "http://127.0.0.1:11434/v1").rstrip("/")
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        key = (self.settings.ollama_api_key or "").strip()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        # Local OpenAI-compatible: .../v1/chat/completions. Cloud + official API: .../api/chat (see docs.ollama.com/api).
+        if base.endswith("/v1"):
+            url = f"{base}/chat/completions"
+            body: dict = {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.4,
+                "stream": False,
+            }
+        else:
+            api_base = base if "/api" in base else f"{base}/api"
+            api_base = api_base.rstrip("/")
+            url = f"{api_base}/chat"
+            body = {
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                "options": {"temperature": 0.4},
+            }
+
+        try:
+            r = requests.post(url, json=body, headers=headers, timeout=(15, 420))
+            r.raise_for_status()
+            data = r.json()
+            content: str | None = None
+            if isinstance(data.get("choices"), list) and data["choices"]:
+                msg = (data["choices"][0] or {}).get("message") or {}
+                content = msg.get("content") if isinstance(msg, dict) else None
+            elif isinstance(data.get("message"), dict):
+                content = data["message"].get("content")
+            if isinstance(content, str) and content.strip():
+                logger.info("LLM: Ollama QA response received (model=%s).", model)
+                return content.strip()
+        except LLMClientError:
+            raise
+        except requests.exceptions.ConnectionError as exc:
+            raise LLMClientError(
+                "Ollama unreachable — local OpenAI compat: OLLAMA_BASE_URL=http://127.0.0.1:11434/v1. "
+                "Cloud API: OLLAMA_BASE_URL=https://ollama.com/api + OLLAMA_API_KEY (docs.ollama.com/api/authentication)."
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise LLMClientError(f"Ollama HTTP error: {exc}") from exc
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMClientError(f"Ollama response parse error: {exc}") from exc
+        raise LLMClientError("Ollama returned empty content for QA.")
+
+    def generate_json_for_qa(self, model: str, system_prompt: str, user_prompt: str) -> str:
+        """
+        Dedicated Q&A chain:
+        1) Ollama (if QA_USE_OLLAMA=true)
+        2) Groq (QA model)
+        3) Gemini fallback on Groq 429/quota
+        """
+        if self.settings.qa_use_ollama:
+            try:
+                return self.generate_json_via_ollama(
+                    model=self.settings.ollama_model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                )
+            except LLMClientError as ollama_exc:
+                logger.warning("Q&A: Ollama failed; falling back to Groq/Gemini chain. reason=%s", ollama_exc)
+        return self.generate_json(model=model, system_prompt=system_prompt, user_prompt=user_prompt)
 
     def _mock_json(self, system_prompt: str, user_prompt: str, use_validator_key: bool = False) -> str:
         sp = system_prompt.lower()

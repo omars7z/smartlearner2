@@ -1,6 +1,7 @@
 import json
 from itertools import groupby
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.agent_repository import AgentRepository
@@ -16,6 +17,7 @@ from app.core.placement_rubric import (
 )
 from app.services.agents import (
     AgentValidationError,
+    AnalyticsAgent,
     LessonGeneratorAgent,
     LessonValidatorAgent,
     PlacementGeneratorAgent,
@@ -73,8 +75,137 @@ class OrchestratorService:
         self.lesson_validator = LessonValidatorAgent()
         self.qa_generator = QAGeneratorAgent(self.llm, self.rag)
         self.qa_validator = QAValidatorAgent()
+        self.analytics_agent = AnalyticsAgent()
         self.assessment_service = AssessmentService(self.llm)
         self.lesson_progress_repo = LessonProgressRepository(db)
+
+    @staticmethod
+    def _normalize_track_key(track: str | None) -> str:
+        return normalize_track(track or "python")
+
+    @staticmethod
+    def _placement_track(payload: dict | None) -> str:
+        data = payload if isinstance(payload, dict) else {}
+        sess = data.get("placement_session") if isinstance(data.get("placement_session"), dict) else {}
+        raw = (
+            sess.get("track")
+            or data.get("track")
+            or (
+                data.get("placement_result", {}).get("track")
+                if isinstance(data.get("placement_result"), dict)
+                else None
+            )
+        )
+        return normalize_track(str(raw or "python"))
+
+    async def build_analytics_summary(self, user_id: int, track: str | None = None) -> dict:
+        from app.models.entities import Course, Lesson, LessonProgress, PlacementTest
+
+        track_key = self._normalize_track_key(track)
+
+        placement_rows = await self.db.execute(
+            select(PlacementTest).where(PlacementTest.user_id == user_id).order_by(PlacementTest.created_at.desc())
+        )
+        placements = [p for p in placement_rows.scalars().all() if self._placement_track(p.questions_json) == track_key]
+        latest_placement = placements[0] if placements else None
+
+        placement_data = latest_placement.questions_json if latest_placement and isinstance(latest_placement.questions_json, dict) else {}
+        placement_result = placement_data.get("placement_result") if isinstance(placement_data.get("placement_result"), dict) else {}
+        placement_session = (
+            placement_data.get("placement_session") if isinstance(placement_data.get("placement_session"), dict) else {}
+        )
+        placement_percentage = (
+            float(placement_result.get("percentage"))
+            if isinstance(placement_result.get("percentage"), (int, float))
+            else (float(latest_placement.score) if latest_placement and latest_placement.score is not None else None)
+        )
+        placement_level = (
+            str(placement_result.get("level") or placement_result.get("final_level") or "").strip() or None
+        )
+        strong_topics = [
+            str(x).strip() for x in (placement_result.get("strong_topics") or placement_session.get("strong_concepts") or []) if str(x).strip()
+        ]
+        weak_topics = [
+            str(x).strip() for x in (placement_result.get("weak_topics") or placement_session.get("wrong_concepts") or []) if str(x).strip()
+        ]
+        recommended_start_topic = str(placement_result.get("recommended_start_topic") or "").strip() or None
+        total_answered = int(placement_session.get("answered_total") or 0)
+
+        course_rows = await self.db.execute(select(Course).where(Course.user_id == user_id))
+        user_courses = [c for c in course_rows.scalars().all() if _track_from_course_title(getattr(c, "title", None)) == track_key]
+        course_ids = [c.id for c in user_courses]
+        course_count = len(user_courses)
+
+        if course_ids:
+            lesson_rows = await self.db.execute(select(Lesson).where(Lesson.course_id.in_(course_ids)))
+            lessons = lesson_rows.scalars().all()
+        else:
+            lessons = []
+        lesson_count = len(lessons)
+        generated_lesson_count = sum(1 for l in lessons if str(l.markdown_content or "").strip())
+        lesson_ids = [l.id for l in lessons]
+
+        if lesson_ids:
+            progress_rows = await self.db.execute(
+                select(LessonProgress).where(LessonProgress.user_id == user_id, LessonProgress.lesson_id.in_(lesson_ids))
+            )
+            progresses = progress_rows.scalars().all()
+        else:
+            progresses = []
+        passed_count = sum(1 for p in progresses if bool(p.passed))
+        lesson_completion_rate = (passed_count / lesson_count) if lesson_count > 0 else 0.0
+
+        if track_key == "deep_learning":
+            course_title = "Deep Learning Foundations"
+            subject = "Deep Learning"
+            source = "Deep Learning textbook excerpts and generated curriculum context"
+        else:
+            course_title = "Python Foundations"
+            subject = "Python Programming"
+            source = self.llm.settings.source_resource
+
+        metrics = {
+            "student_id": user_id,
+            "track": track_key,
+            "course_title": course_title,
+            "has_placement": latest_placement is not None,
+            "placement_id": latest_placement.id if latest_placement else None,
+            "placement_level": placement_level,
+            "placement_percentage": placement_percentage,
+            "total_answered": total_answered,
+            "strong_topics": list(dict.fromkeys(strong_topics))[:10],
+            "weak_topics": list(dict.fromkeys(weak_topics))[:10],
+            "recommended_start_topic": recommended_start_topic,
+            "course_count": course_count,
+            "lesson_count": lesson_count,
+            "generated_lesson_count": generated_lesson_count,
+            "lesson_completion_rate": round(float(lesson_completion_rate), 4),
+        }
+
+        insights = self.analytics_agent.generate(metrics)
+        await self.agent_repo.log_run(
+            agent_name=self.analytics_agent.name,
+            stage="generate",
+            input_json={"track": track_key, "metrics": metrics},
+            output_json=insights,
+            is_valid=True,
+            user_id=user_id,
+        )
+
+        return {
+            "status": "ok",
+            "intent": "analytics_summary",
+            "result": {
+                "course_context": {
+                    "track": track_key,
+                    "course_title": course_title,
+                    "subject": subject,
+                    "source": source,
+                },
+                "metrics": metrics,
+                "insights": insights,
+            },
+        }
 
     async def create_placement_test(
         self,
@@ -691,7 +822,12 @@ class OrchestratorService:
                 else "General Python Foundations (Python Basics)."
             )
 
-        raw_qa = self.qa_generator.generate(question=question, lesson_markdown=lesson_markdown, track=track_key)
+        raw_qa = self.qa_generator.generate(
+            question=question,
+            lesson_markdown=lesson_markdown,
+            track=track_key,
+            student_context=student_context,
+        )
         await self.agent_repo.log_run(
             agent_name=self.qa_generator.name,
             stage="generate",

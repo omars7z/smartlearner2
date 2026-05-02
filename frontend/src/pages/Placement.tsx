@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import Navbar from '../components/Navbar'
+import { API_BASE } from '../services/api'
 
 interface Question {
   id: string
@@ -21,8 +22,6 @@ interface PlacementResult {
   weak_topics: string[]
   recommended_start_topic: string
 }
-
-const API_BASE = 'http://localhost:8000/api/v1'
 
 export default function Placement() {
   const [track, setTrack] = useState<'python' | 'deep-learning'>('python')
@@ -56,7 +55,7 @@ export default function Placement() {
       setCurrentQuestion(data.next_question ?? null)
     } catch (err) {
       console.error(err)
-      setError('Failed to start placement test. Check backend on localhost:8000.')
+      setError('Failed to start placement test. Check that the API is running (see VITE_API_ORIGIN in frontend .env if deployed).')
     } finally {
       setLoading(false)
     }

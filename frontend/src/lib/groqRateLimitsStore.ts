@@ -6,7 +6,9 @@ export type GroqRateLimitState = {
   receivedAt?: number
 }
 
-const HEADER_TO_KEY: [string, keyof GroqRateLimitState][] = [
+type GroqRateLimitStringKey = Exclude<keyof GroqRateLimitState, 'receivedAt'>
+
+const HEADER_TO_KEY: [string, GroqRateLimitStringKey][] = [
   ['x-app-ratelimit-limit-requests', 'limitRequests'],
   ['x-app-ratelimit-remaining-requests', 'remainingRequests'],
   ['x-app-ratelimit-reset-requests', 'resetRequestsSeconds'],
@@ -60,7 +62,7 @@ export function applyGroqLimitsFromJson(body: Record<string, unknown> | null | u
   if (!body || typeof body !== 'object') return
   const next = { ...snapshot }
   let changed = false
-  const map: [string, keyof GroqRateLimitState][] = [
+  const map: [string, GroqRateLimitStringKey][] = [
     ['limit_requests', 'limitRequests'],
     ['remaining_requests', 'remainingRequests'],
     ['reset_requests_seconds', 'resetRequestsSeconds'],

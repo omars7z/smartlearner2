@@ -1,6 +1,7 @@
 """LLM-backed agents: one module per agent; shared base in `base`."""
 
 from app.services.agents.base import AgentPair, AgentValidationError
+from app.services.agents.analytics_agent import AnalyticsAgent
 from app.services.agents.lesson_generator import LessonGeneratorAgent
 from app.services.agents.lesson_validator import LessonValidatorAgent
 from app.services.agents.placement_generator import (
@@ -19,6 +20,7 @@ __all__ = [
     "PLACEMENT_MCQ_SYSTEM_PROMPT",
     "AgentPair",
     "AgentValidationError",
+    "AnalyticsAgent",
     "LessonGeneratorAgent",
     "LessonValidatorAgent",
     "PlacementGeneratorAgent",

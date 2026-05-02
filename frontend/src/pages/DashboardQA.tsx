@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Bot, SendHorizontal } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useAccentTheme } from '../hooks/useAccentTheme'
 import { useToast } from '../context/ToastContext'
 import { useDashboard } from '../context/DashboardContext'
@@ -31,6 +33,14 @@ interface ChatMessage {
   sources?: string[]
 }
 
+function extractTopicHint(input: string): string {
+  const lower = input.toLowerCase()
+  const m =
+    lower.match(/\b(variable assignment|variables?|loops?|functions?|conditionals?|lists?|dictionaries?|tuples?|strings?|debugging|errors?)\b/) ||
+    lower.match(/\b([a-z][a-z0-9_]{3,})\b/)
+  return (m?.[1] || 'python basics').trim()
+}
+
 export default function DashboardQA() {
   const { accentPrimary, accentSecondary } = useAccentTheme()
   const { addToast } = useToast()
@@ -38,6 +48,8 @@ export default function DashboardQA() {
   const [question, setQuestion] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(false)
+  const [qaTopic, setQaTopic] = useState<string>('python basics')
+  const [qaMasteredLastCheck, setQaMasteredLastCheck] = useState(false)
   const STORAGE_KEY = 'smartlearner-qa-messages'
   const [waitingForAnswer, setWaitingForAnswer] = useState(false)
   const [currentQuickCheck, setCurrentQuickCheck] = useState<ExplanationPayload['quick_check'] | null>(null)
@@ -107,10 +119,12 @@ export default function DashboardQA() {
       setQuestion('')
       setWaitingForAnswer(false)
       setCurrentQuickCheck(null)
+      setQaMasteredLastCheck(isCorrect)
       return
     }
 
     const q = raw
+    setQaTopic(extractTopicHint(q))
     setMessages((prev) => [...prev, { role: 'user', content: q }])
     if (!override) setQuestion('')
     setLoading(true)
@@ -121,6 +135,10 @@ export default function DashboardQA() {
         mastery_level: masteryLevel,
         knowledge_map: knowledgeMap,
         track: selectedTrack,
+        qa_topic: qaTopic,
+        qa_followup: messages.length >= 2,
+        qa_confused: /i don't get|still confused|مش فاهم|مو فاهم|مش فاهمة|مو فاهمة|مش واضح/i.test(q),
+        qa_mastered_last_check: qaMasteredLastCheck,
       }
       // Course-wide Q&A: do not scope by current_topic; backend uses RAG grounded to selected track.
       const data = await qaApi.ask(q, undefined, studentContext)
@@ -178,6 +196,8 @@ export default function DashboardQA() {
         setCurrentQuickCheck(null)
         setWaitingForAnswer(false)
       }
+      // Reset one-shot mastery hint after it has been sent once.
+      if (qaMasteredLastCheck) setQaMasteredLastCheck(false)
 
       setMessages((prev) => [
         ...prev,
@@ -269,37 +289,43 @@ export default function DashboardQA() {
             >
               {m.role === 'assistant' && m.explanation ? (
                 <div className="space-y-3 text-sm">
-                  {m.explanation.hook && <p className="font-semibold">💡 {m.explanation.hook}</p>}
-                  {m.explanation.core_explanation && <p>{m.explanation.core_explanation}</p>}
-
-                  {m.explanation.example?.content && (
-                    <div>
-                      <p className="font-semibold mb-1">💻 Example:</p>
-                      <pre className="rounded-md px-3 py-2 text-xs overflow-x-auto"
-                        style={{
-                          backgroundColor: 'rgba(15,23,42,0.9)',
-                          color: '#e5e7eb',
-                          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                        }}
-                      >
-                        <code>{m.explanation.example.content}</code>
-                      </pre>
-                    </div>
-                  )}
-
-                  {m.explanation.common_mistake && (
-                    <p>
-                      <span className="font-semibold">⚠️ Common mistake: </span>
-                      {m.explanation.common_mistake}
-                    </p>
-                  )}
-
-                  {m.explanation.quick_check?.question && (
-                    <div>
-                      <p className="font-semibold">✅ Quick check:</p>
-                      <p>{m.explanation.quick_check.question}</p>
-                    </div>
-                  )}
+                  <div className="prose prose-invert prose-sm max-w-none leading-7">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        pre: ({ children }) => (
+                          <pre
+                            className="rounded-md px-3 py-2 text-xs overflow-x-auto"
+                            style={{
+                              backgroundColor: 'rgba(15,23,42,0.9)',
+                              color: '#e5e7eb',
+                              fontFamily:
+                                'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                            }}
+                          >
+                            {children}
+                          </pre>
+                        ),
+                        code: ({ className, children, ...props }) => {
+                          const isInline = !className
+                          if (isInline) {
+                            return (
+                              <code className="px-1 py-0.5 rounded bg-slate-700/70 text-slate-100" {...props}>
+                                {children}
+                              </code>
+                            )
+                          }
+                          return (
+                            <code className={className} {...props}>
+                              {children}
+                            </code>
+                          )
+                        },
+                      }}
+                    >
+                      {m.content}
+                    </ReactMarkdown>
+                  </div>
 
                   {m.sources && m.sources.length > 0 && (
                     <p className="text-[11px] text-[color:var(--text-muted)] pt-1">

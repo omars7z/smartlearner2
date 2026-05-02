@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from .analytics import router as analytics_router
 from .auth import router as auth_router
 from .curriculum import router as curriculum_router
 from .exams import router as exams_router
@@ -22,4 +23,5 @@ def build_api_router() -> APIRouter:
     router.include_router(exams_router)
     router.include_router(resources_router)
     router.include_router(usage_router)
+    router.include_router(analytics_router)
     return router

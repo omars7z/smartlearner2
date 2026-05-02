@@ -17,10 +17,24 @@ class AgentPair:
         self.llm = llm
         self.settings = get_settings()
 
-    def _generate_with_retries(self, model: str, system_prompt: str, user_prompt: str) -> dict:
+    def _generate_with_retries(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        use_ollama_qa: bool = False,
+    ) -> dict:
         last_error = "Unknown error"
         for _ in range(3):
-            raw = self.llm.generate_json(model=model, system_prompt=system_prompt, user_prompt=user_prompt)
+            if use_ollama_qa:
+                raw = self.llm.generate_json_for_qa(
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                )
+            else:
+                raw = self.llm.generate_json(model=model, system_prompt=system_prompt, user_prompt=user_prompt)
             try:
                 return safe_json_loads(raw)
             except json.JSONDecodeError as exc:

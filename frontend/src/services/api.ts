@@ -1,7 +1,13 @@
 import axios from 'axios'
 import { applyGroqLimitsFromResponseHeaders } from '../lib/groqRateLimitsStore'
 
-const API_BASE = 'http://localhost:8000/api/v1'
+/** e.g. VITE_API_ORIGIN=https://your-backend.railway.app (no trailing slash) — same user DB when backend uses cloud DATABASE_URL */
+const API_BASE =
+  import.meta.env.VITE_API_ORIGIN != null && String(import.meta.env.VITE_API_ORIGIN).trim() !== ''
+    ? `${String(import.meta.env.VITE_API_ORIGIN).replace(/\/$/, '')}/api/v1`
+    : 'http://localhost:8000/api/v1'
+
+export { API_BASE }
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -443,6 +449,54 @@ export const quickAssessmentApi = {
       topic,
       answers,
     })
+    return res.data
+  },
+}
+
+export interface AnalyticsSummaryResponse {
+  status: string
+  intent: string
+  result: {
+    course_context: {
+      track: string
+      course_title: string
+      subject: string
+      source: string
+    }
+    metrics: {
+      student_id: number
+      track: string
+      course_title: string
+      has_placement: boolean
+      placement_id?: number | null
+      placement_level?: string | null
+      placement_percentage?: number | null
+      total_answered: number
+      strong_topics: string[]
+      weak_topics: string[]
+      recommended_start_topic?: string | null
+      course_count: number
+      lesson_count: number
+      generated_lesson_count: number
+      lesson_completion_rate: number
+    }
+    insights: {
+      summary: string
+      strengths: { concept: string; evidence: string }[]
+      weaknesses: { concept: string; evidence: string; severity?: string }[]
+      patterns: string[]
+      recommendations: { priority: number; action: string; target_concept?: string }[]
+      next_best_lesson: { topic: string; reason: string }
+      risk_level: 'low' | 'medium' | 'high'
+      confidence: 'low' | 'medium' | 'high'
+    }
+  }
+}
+
+export const analyticsApi = {
+  async summary(track?: string) {
+    const params = track ? `?track=${encodeURIComponent(track)}` : ''
+    const res = await api.get<AnalyticsSummaryResponse>(`/analytics/summary${params}`, { timeout: 90_000 })
     return res.data
   },
 }

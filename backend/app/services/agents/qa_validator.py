@@ -14,6 +14,16 @@ def _qa_source_grounding_suffix() -> str:
 class QAValidatorAgent:
     name = "qa-validator"
 
+    @staticmethod
+    def _ensure_quick_check_suffix(answer: str) -> str:
+        if "💡 **Quick check:**" in answer and '_Reply with your answer or type "next" to continue._' in answer:
+            return answer
+        quick_prompt = (
+            '\n\n> 💡 **Quick check:** What is one key idea from the explanation above?\n'
+            '> _Reply with your answer or type "next" to continue._'
+        )
+        return answer.rstrip() + quick_prompt
+
     def validate(self, payload: dict, track: str = "python") -> dict:
         track_key = (track or "python").strip().lower().replace("-", "_")
         if track_key in {"deep_learning", "dl"}:
@@ -30,5 +40,6 @@ class QAValidatorAgent:
         if has_python3_hallucinations(answer):
             raise AgentValidationError("Hallucinated Python 2-only functions detected.")
         if required_substring not in answer.lower():
-            payload["answer"] = answer.rstrip() + source_suffix
+            answer = answer.rstrip() + source_suffix
+        payload["answer"] = self._ensure_quick_check_suffix(answer)
         return payload

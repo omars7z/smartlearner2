@@ -108,6 +108,50 @@ _QA_CHITCHAT_TOKENS = frozenset(
     }
 )
 
+# Core PY4E/Python learning terms that should pass scope-gate quickly.
+_QA_PY4E_CORE_TOKENS = frozenset(
+    {
+        "python",
+        "variable",
+        "variables",
+        "assignment",
+        "expression",
+        "expressions",
+        "statement",
+        "statements",
+        "string",
+        "strings",
+        "integer",
+        "integers",
+        "float",
+        "floats",
+        "boolean",
+        "booleans",
+        "list",
+        "lists",
+        "dictionary",
+        "dictionaries",
+        "tuple",
+        "tuples",
+        "loop",
+        "loops",
+        "condition",
+        "conditional",
+        "function",
+        "functions",
+        "parameter",
+        "parameters",
+        "argument",
+        "arguments",
+        "file",
+        "files",
+        "input",
+        "output",
+        "debug",
+        "debugging",
+    }
+)
+
 
 def _query_tokens_for_overlap(query: str) -> set[str]:
     raw = {t for t in query.lower().split() if t}
@@ -196,6 +240,9 @@ class RAGService:
             return False
         if len(mt) == 1 and next(iter(mt)) in _QA_CHITCHAT_TOKENS:
             return False
+        # Accept direct Python/PY4E concept questions even if lexical overlap is low.
+        if mt.intersection(_QA_PY4E_CORE_TOKENS):
+            return True
         score, overlap_n = self._best_chunk_score_and_overlap(q)
         if len(mt) >= 2 and overlap_n < 2:
             return False
@@ -203,10 +250,10 @@ class RAGService:
             return score >= QA_SINGLE_TOKEN_MIN_SCORE
         return score >= QA_MIN_BOOK_RELEVANCE_SCORE
 
-    def retrieve_python_basics_context(self, query: str, k: int = 3) -> list[str]:
+    def retrieve_course_context(self, query: str, k: int = 3, *, track: str | None = None) -> list[str]:
         """
-        Lexical match over chunk text + TOC metadata (sub_lesson title/id, chapter).
-        Returns formatted strings so prompts cite PY4E subsection anchors.
+        Lexical match over chunk text + TOC metadata.
+        `track` is reserved for multi-course indexes; today's PY4E index remains the default.
         """
         chunks = self._chunks_for_retrieval()
         q_raw = (query or "").strip()
@@ -242,3 +289,7 @@ class RAGService:
             if passage:
                 out.append(passage)
         return out
+
+    def retrieve_python_basics_context(self, query: str, k: int = 3) -> list[str]:
+        """Backward-compatible wrapper for the original Python/PY4E track."""
+        return self.retrieve_course_context(query, k=k, track="python")

@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api.routes import router
+from app.core.config import get_settings
 from app.core.groq_rate_limits import response_header_pairs
 from app.db.base import Base
 from app.db.session import engine
@@ -55,8 +56,10 @@ async def _ensure_lessons_table_columns(conn) -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
-        await _ensure_users_table_columns(conn)
-        await _ensure_lessons_table_columns(conn)
+        settings = get_settings()
+        if settings.database_url.startswith("sqlite"):
+            await _ensure_users_table_columns(conn)
+            await _ensure_lessons_table_columns(conn)
         await conn.run_sync(Base.metadata.create_all)
     yield
 
@@ -68,17 +71,24 @@ _EXPOSE_RATE_HEADERS = [
     "X-App-RateLimit-Remaining-Tokens",
 ]
 
-app = FastAPI(title="SmartLearner 2.0 Backend", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+def _cors_origin_list() -> list[str]:
+    base = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:8080",
         "http://127.0.0.1:8080",
-    ],
+    ]
+    settings = get_settings()
+    extra = [o.strip() for o in settings.cors_extra_origins.split(",") if o.strip()]
+    return base + extra
+
+
+app = FastAPI(title="SmartLearner 2.0 Backend", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origin_list(),
     # Any Vite/other dev port on loopback (Origin includes host + port).
     allow_origin_regex=r"^http://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
