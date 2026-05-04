@@ -29,7 +29,7 @@ from app.services.agents import (
 )
 from app.services.assessment_service import AssessmentService
 from app.services.guardrails import run_exam_code_in_sandbox, sanitize_prompt
-from app.services.llm_client import LLMClient
+from app.services.llm_client import LLMClient, LLMClientError
 from app.services.orchestrator.common import (
     assign_question_ids as _assign_question_ids,
     duration_minutes_for_level as _duration_minutes_for_level,
@@ -50,6 +50,8 @@ from app.services.orchestrator.lesson_access import (
     can_user_access_lesson,
     split_markdown_into_sub_focuses,
 )
+from app.services.orchestrator.agent_runs import log_agent_run, validate_and_log
+from app.services.orchestrator.qa_helpers import build_failure_context, qa_envelope, qa_track_scope_envelope
 from app.services.orchestrator.syllabus import (
     build_local_syllabus_payload as _build_local_syllabus_payload,
     topic_slug as _topic_slug,
@@ -127,6 +129,71 @@ class OrchestratorService:
             )
         )
         return normalize_track(str(raw or "python"))
+
+    @staticmethod
+    def _track_from_lesson_context(lesson, course) -> str:
+        # Prefer explicit, persisted track metadata over title heuristics.
+        meta = getattr(lesson, "metadata_json", None)
+        if isinstance(meta, dict):
+            raw = meta.get("track")
+            if isinstance(raw, str) and raw.strip():
+                return normalize_track(raw)
+
+        # Backward-compatible fallback for existing rows without track metadata.
+        lesson_text = " ".join(
+            [
+                str(getattr(lesson, "title", "") or ""),
+                str(getattr(lesson, "topic", "") or ""),
+            ]
+        ).lower()
+        if any(k in lesson_text for k in ("deep learning", "neural", "gradient", "tensor", "backprop")):
+            return "deep_learning"
+
+        return _track_from_course_title(getattr(course, "title", None))
+
+    @staticmethod
+    def _fallback_lesson_markdown(*, title: str, topic: str, track: str, level: str) -> str:
+        topic_text = (topic or title or "this topic").replace("_", " ").strip()
+        level_text = (level or "beginner").replace("_", " ").title()
+        if normalize_track(track) in {"deep_learning", "dl"}:
+            source_line = "Deep Learning (Goodfellow, Bengio, Courville) and lesson context."
+            example = (
+                "```python\n"
+                "import numpy as np\n\n"
+                "x = np.array([0.5, -1.2, 3.0])\n"
+                "relu = np.maximum(0, x)\n"
+                "print(relu)\n"
+                "```\n"
+            )
+        else:
+            source_line = "Python for Everybody and lesson context."
+            example = (
+                "```python\n"
+                "x = [2, -1, 5]\n"
+                "positive = [v for v in x if v > 0]\n"
+                "print(positive)\n"
+                "```\n"
+            )
+        return (
+            f"## Learning objectives\n"
+            f"- Explain the key idea behind **{topic_text}**.\n"
+            f"- Apply the concept in a small, runnable example.\n"
+            f"- Identify one common mistake and how to avoid it.\n\n"
+            f"## Core ideas\n"
+            f"This fallback lesson is generated because live LLM providers are temporarily unavailable. "
+            f"It focuses on **{topic_text}** at **{level_text}** level using {source_line}\n\n"
+            f"## Worked example\n"
+            f"{example}\n"
+            f"## Common pitfalls\n"
+            f"- Using the concept without checking assumptions.\n"
+            f"- Copying formulas/code without validating outputs.\n\n"
+            f"## Practice\n"
+            f"1. Summarize **{topic_text}** in 2-3 lines.\n"
+            f"2. Modify the example and explain the output.\n\n"
+            f"## Summary\n"
+            f"- This is a temporary fallback lesson.\n"
+            f"- Retry generation later for a richer, personalized version.\n"
+        )
 
     async def build_analytics_summary(self, user_id: int, track: str | None = None) -> dict:
         from app.models.entities import Course, Lesson, LessonProgress, PlacementTest
@@ -213,7 +280,8 @@ class OrchestratorService:
         }
 
         insights = self.analytics_agent.generate(metrics)
-        await self.agent_repo.log_run(
+        await log_agent_run(
+            self.agent_repo,
             agent_name=self.analytics_agent.name,
             stage="generate",
             input_json={"track": track_key, "metrics": metrics},
@@ -250,7 +318,8 @@ class OrchestratorService:
             )
         norm_track = normalize_track(track)
         raw = self.placement_generator.generate(level=level, question_count=question_count, track=norm_track)
-        await self.agent_repo.log_run(
+        await log_agent_run(
+            self.agent_repo,
             agent_name=self.placement_generator.name,
             stage="generate",
             input_json={"level": level, "question_count": question_count, "track": norm_track, "flow": "generate"},
@@ -258,25 +327,13 @@ class OrchestratorService:
             is_valid=True,
             user_id=user_id,
         )
-        try:
-            generated = self.placement_validator.validate(raw, level, question_count, track=norm_track)
-        except AgentValidationError as exc:
-            await self.agent_repo.log_run(
-                agent_name=self.placement_validator.name,
-                stage="validate",
-                input_json={"level": level, "question_count": question_count, "track": norm_track},
-                output_json={"error": str(exc)},
-                is_valid=False,
-                user_id=user_id,
-            )
-            raise
-        await self.agent_repo.log_run(
-            agent_name=self.placement_validator.name,
-            stage="validate",
+        generated = await validate_and_log(
+            self.agent_repo,
+            validator_name=self.placement_validator.name,
             input_json={"level": level, "question_count": question_count, "track": norm_track},
-            output_json=generated,
-            is_valid=True,
+            payload=raw,
             user_id=user_id,
+            validate_fn=lambda p: self.placement_validator.validate(p, level, question_count, track=norm_track),
         )
         placement = await self.course_repo.create_placement_test(user_id=user_id, questions_json=generated)
         return {"placement_id": placement.id, "questions": generated["questions"]}
@@ -626,7 +683,8 @@ class OrchestratorService:
                 weak_topics=weak_topics,
                 strong_topics=strong_topics,
             )
-        await self.agent_repo.log_run(
+        await log_agent_run(
+            self.agent_repo,
             agent_name=self.syllabus_generator.name,
             stage="generate",
             input_json={
@@ -641,25 +699,13 @@ class OrchestratorService:
             is_valid=True,
             user_id=user_id,
         )
-        try:
-            generated = self.syllabus_validator.validate(raw_syllabus, placement_level=level_str, track=track)
-        except AgentValidationError as exc:
-            await self.agent_repo.log_run(
-                agent_name=self.syllabus_validator.name,
-                stage="validate",
-                input_json={"placement_id": placement_id, "score": score, "level": level_str},
-                output_json={"error": str(exc)},
-                is_valid=False,
-                user_id=user_id,
-            )
-            raise
-        await self.agent_repo.log_run(
-            agent_name=self.syllabus_validator.name,
-            stage="validate",
+        generated = await validate_and_log(
+            self.agent_repo,
+            validator_name=self.syllabus_validator.name,
             input_json={"placement_id": placement_id, "score": score, "level": level_str},
-            output_json=generated,
-            is_valid=True,
+            payload=raw_syllabus,
             user_id=user_id,
+            validate_fn=lambda p: self.syllabus_validator.validate(p, placement_level=level_str, track=track),
         )
 
         # Transform lessons from syllabus format to CourseRepository format
@@ -674,7 +720,11 @@ class OrchestratorService:
                 "prerequisites": lesson.get("prerequisites", []),
                 "markdown_content": str(lesson.get("description") or ""),
                 "unit_title": (str(lesson.get("unit_title")).strip() if lesson.get("unit_title") else None),
-                "metadata_json": {"chapter_ref": int(ch_ref)} if ch_ref is not None else {},
+                "metadata_json": (
+                    {"chapter_ref": int(ch_ref), "track": track}
+                    if ch_ref is not None
+                    else {"track": track}
+                ),
             })
 
         course = await self.course_repo.create_course_with_lessons(
@@ -785,7 +835,7 @@ class OrchestratorService:
             if course.level:
                 level = _normalized_course_level(course.level)
                 duration_minutes = _duration_minutes_for_level(level)
-            course_track = _track_from_course_title(getattr(course, "title", None))
+            course_track = self._track_from_lesson_context(lesson, course)
         except Exception:
             pass
 
@@ -838,14 +888,35 @@ class OrchestratorService:
 
         chapter_ref = _extract_chapter_ref(getattr(lesson, "metadata_json", None))
 
-        raw_lesson = self.lesson_generator.generate(
-            topic=lesson.topic,
-            lesson_title=lesson.title,
-            track=course_track,
-            level=level,
-            chapter_ref=chapter_ref,
-        )
-        await self.agent_repo.log_run(
+        try:
+            raw_lesson = self.lesson_generator.generate(
+                topic=lesson.topic,
+                lesson_title=lesson.title,
+                track=course_track,
+                level=level,
+                chapter_ref=chapter_ref,
+            )
+        except LLMClientError:
+            # Graceful degradation when providers are rate-limited/unavailable:
+            # serve persisted lesson text instead of failing the whole endpoint.
+            fallback_markdown = (lesson.markdown_content or "").strip()
+            if not _is_dynamic_lesson_markdown(fallback_markdown):
+                fallback_markdown = self._fallback_lesson_markdown(
+                    title=lesson.title,
+                    topic=lesson.topic,
+                    track=course_track,
+                    level=level,
+                )
+            return _lesson_response_payload(
+                lesson_id=lesson.id,
+                title=lesson.title,
+                duration_minutes=duration_minutes,
+                markdown=fallback_markdown,
+                llm_used=False,
+                course_id=lesson.course_id,
+            )
+        await log_agent_run(
+            self.agent_repo,
             agent_name=self.lesson_generator.name,
             stage="generate",
             input_json={
@@ -858,25 +929,13 @@ class OrchestratorService:
             is_valid=True,
             user_id=user_id,
         )
-        try:
-            generated = self.lesson_validator.validate(raw_lesson, track=course_track)
-        except AgentValidationError as exc:
-            await self.agent_repo.log_run(
-                agent_name=self.lesson_validator.name,
-                stage="validate",
-                input_json={"lesson_id": lesson_id, "topic": lesson.topic},
-                output_json={"error": str(exc)},
-                is_valid=False,
-                user_id=user_id,
-            )
-            raise
-        await self.agent_repo.log_run(
-            agent_name=self.lesson_validator.name,
-            stage="validate",
+        generated = await validate_and_log(
+            self.agent_repo,
+            validator_name=self.lesson_validator.name,
             input_json={"lesson_id": lesson_id, "topic": lesson.topic},
-            output_json=generated,
-            is_valid=True,
+            payload=raw_lesson,
             user_id=user_id,
+            validate_fn=lambda p: self.lesson_validator.validate(p, track=course_track),
         )
         updated = await self.course_repo.update_lesson_content(lesson.id, generated["markdown"])
 
@@ -906,7 +965,7 @@ class OrchestratorService:
         track_from_ctx = student_context.get("track") if isinstance(student_context, dict) else None
         track_key = normalize_track(track_from_ctx)
         if not self.rag.is_likely_book_related_question(safe_q):
-            return self._qa_track_scope_envelope(track_key)
+            return qa_track_scope_envelope(track_key)
 
         lesson_markdown = ""
         if lesson_id is not None and lesson_id != 0:
@@ -931,95 +990,31 @@ class OrchestratorService:
             question=question,
             lesson_markdown=lesson_markdown,
             track=track_key,
-            student_context=student_context,
+            student_context=student_context if isinstance(student_context, dict) else None,
         )
-        await self.agent_repo.log_run(
+        qa_input = {
+            "lesson_id": lesson_id,
+            "current_topic": current_topic,
+            "question": question,
+        }
+        await log_agent_run(
+            self.agent_repo,
             agent_name=self.qa_generator.name,
             stage="generate",
-            input_json={
-                "lesson_id": lesson_id,
-                "current_topic": current_topic,
-                "question": question,
-            },
+            input_json=qa_input,
             output_json=raw_qa,
             is_valid=True,
             user_id=user_id,
         )
-        try:
-            generated = self.qa_validator.validate(raw_qa, track=track_key)
-        except AgentValidationError as exc:
-            await self.agent_repo.log_run(
-                agent_name=self.qa_validator.name,
-                stage="validate",
-                input_json={
-                    "lesson_id": lesson_id,
-                    "current_topic": current_topic,
-                    "question": question,
-                },
-                output_json={"error": str(exc)},
-                is_valid=False,
-                user_id=user_id,
-            )
-            raise
-        await self.agent_repo.log_run(
-            agent_name=self.qa_validator.name,
-            stage="validate",
-            input_json={
-                "lesson_id": lesson_id,
-                "current_topic": current_topic,
-                "question": question,
-            },
-            output_json=generated,
-            is_valid=True,
+        generated = await validate_and_log(
+            self.agent_repo,
+            validator_name=self.qa_validator.name,
+            input_json=qa_input,
+            payload=raw_qa,
             user_id=user_id,
+            validate_fn=lambda p: self.qa_validator.validate(p, track=track_key),
         )
-        return self._qa_envelope(generated)
-
-    def _qa_track_scope_envelope(self, track: str) -> dict:
-        """No LLM call: question looks unrelated to selected-track chunks (saves tokens)."""
-        if normalize_track(track) in {"deep_learning", "dl"}:
-            msg = (
-                "I'm only the **Deep Learning** chatbot for this course - I help with deep learning "
-                "book and lecture-note material plus your lessons. Ask something about deep learning topics."
-            )
-        else:
-            msg = (
-                "I'm only the **Python for Everybody (PY4E)** chatbot for this course - I help with the "
-                "book material and your lessons. Ask something about PY4E or your course topics."
-            )
-        return {
-            "status": "ok",
-            "intent": "qa_py4e_scope",
-            "result": {
-                "status": "ok",
-                "explanation": {
-                    "core_explanation": msg,
-                },
-                "rag": {
-                    "chunks_used": 0,
-                    "selected_chunks": [],
-                    "skipped_llm": True,
-                },
-            },
-            "routing": {"steps": ["sanitize", "book_relevance_gate"]},
-        }
-
-    def _qa_envelope(self, generated: dict) -> dict:
-        """Shape expected by frontend QAResponse (result.explanation.core_explanation + result.rag)."""
-        answer = str(generated.get("answer", ""))
-        rag = generated.get("rag") or {}
-        return {
-            "status": "ok",
-            "intent": "qa_rag",
-            "result": {
-                "status": "ok",
-                "explanation": {
-                    "core_explanation": answer,
-                },
-                "rag": rag,
-            },
-            "routing": {"steps": ["sanitize", "rag_retrieve", "qa_generator", "qa_validator"]},
-        }
+        return qa_envelope(generated)
 
     async def run_exam_code(self, code: str) -> dict:
         result = run_exam_code_in_sandbox(code)
@@ -1042,7 +1037,7 @@ class OrchestratorService:
             )
         old_md = (lesson.markdown_content or "").strip()
         parts, titles = split_markdown_into_sub_focuses(old_md)
-        track = _track_from_course_title(getattr(course, "title", None))
+        track = self._track_from_lesson_context(lesson, course)
         chapter_ref = _extract_chapter_ref(lesson.metadata_json)
         child_rows: list[dict] = []
         for i, (snippet, stitle) in enumerate(zip(parts, titles)):
@@ -1216,13 +1211,18 @@ class OrchestratorService:
 
         level = _normalized_course_level(lesson.course.level)
         chapter_ref = _extract_chapter_ref(lesson.metadata_json)
-        track = _track_from_course_title(getattr(lesson.course, "title", None))
+        track = self._track_from_lesson_context(lesson, lesson.course)
 
         if lesson.is_sub_lesson:
+            failure_context = build_failure_context(
+                questions if isinstance(questions, list) else [],
+                answer_map,
+            )
             raw_sl = self.lesson_generator.generate_sub_lesson(
                 parent_topic=lesson.topic,
                 sub_title=lesson.title,
                 source_excerpt=(lesson.markdown_content or "")[:12000],
+                failure_context=failure_context or None,
                 track=track,
                 level=level,
                 chapter_ref=chapter_ref,

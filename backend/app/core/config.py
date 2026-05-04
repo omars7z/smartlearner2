@@ -28,13 +28,8 @@ class Settings(BaseSettings):
     groq_api_key_validators: str | None = Field(default=None, alias="GROQ_API_KEY_VALIDATORS")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
 
-    # Q&A via Ollama: local OpenAI-compat http://127.0.0.1:11434/v1 — or cloud https://ollama.com/api + OLLAMA_API_KEY.
-    qa_use_ollama: bool = Field(default=False, alias="QA_USE_OLLAMA")
     # Dedicated Q&A model (separate from SMART_MODEL used by other agents).
     qa_model: str = Field(default="llama-3.1-8b-instant", alias="QA_MODEL")
-    ollama_base_url: str = Field(default="http://127.0.0.1:11434/v1", alias="OLLAMA_BASE_URL")
-    ollama_model: str = Field(default="llama3.2", alias="OLLAMA_MODEL")
-    ollama_api_key: str | None = Field(default=None, alias="OLLAMA_API_KEY")
 
     embedding_model: str = Field(default="all-MiniLM-L6-v2", alias="EMBEDDING_MODEL")
     vector_db_path: str = Field(default="./vector_db", alias="VECTOR_DB_PATH")

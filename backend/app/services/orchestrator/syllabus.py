@@ -121,7 +121,7 @@ def build_local_syllabus_payload(
             lessons.append(
                 {
                     "topic": t,
-                    "lesson_title": f"Practical {t}",
+                    "lesson_title": f"{t}",
                     "description": (
                         (
                             f"Learn {t} through practical deep learning examples and experiments. "
