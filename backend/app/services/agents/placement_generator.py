@@ -123,7 +123,13 @@ class PlacementGeneratorAgent(AgentPair):
             k=24,
         )
         if not pool_fallback:
-            raise AgentValidationError("No context chunks available for placement generation.")
+            pool_fallback = [
+                "Python for Everybody (PY4E) foundations: variables, expressions, conditionals, strings, "
+                "basic I/O, and reading small programs including errors and tracebacks."
+                if track_key not in {"deep_learning", "dl"}
+                else "Deep Learning foundations: vectors, matrices, gradients, data splits, linear models, "
+                "and evaluating simple predictors."
+            ]
 
         questions: list[dict] = []
 

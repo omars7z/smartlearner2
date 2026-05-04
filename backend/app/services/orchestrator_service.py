@@ -283,49 +283,73 @@ class OrchestratorService:
 
     async def start_placement_session(self, user_id: int, track: str) -> dict:
         first_level = LEVEL_ORDER[0]
-        norm_track = normalize_track(track)
-        raw = self.placement_generator.generate(
-            level=first_level,
-            question_count=QUESTIONS_PER_LEVEL,
-            track=norm_track,
-        )
-        await self.agent_repo.log_run(
-            agent_name=self.placement_generator.name,
-            stage="generate",
-            input_json={
-                "level": first_level,
-                "question_count": QUESTIONS_PER_LEVEL,
-                "track": track,
-                "flow": "session",
-            },
-            output_json=raw,
-            is_valid=True,
-            user_id=user_id,
-        )
-        try:
-            generated = self.placement_validator.validate(raw, first_level, QUESTIONS_PER_LEVEL, track=norm_track)
-        except AgentValidationError as exc:
+        ui_track = normalize_track(track) or "python"
+        gen_track = "deep_learning" if ui_track in ("deep_learning", "dl") else "python"
+
+        last_exc: AgentValidationError | None = None
+        generated: dict | None = None
+        raw: dict | None = None
+        for attempt in range(3):
+            try:
+                raw = self.placement_generator.generate(
+                    level=first_level,
+                    question_count=QUESTIONS_PER_LEVEL,
+                    track=gen_track,
+                )
+            except AgentValidationError as exc:
+                last_exc = exc
+                continue
+            await self.agent_repo.log_run(
+                agent_name=self.placement_generator.name,
+                stage="generate",
+                input_json={
+                    "level": first_level,
+                    "question_count": QUESTIONS_PER_LEVEL,
+                    "track": track,
+                    "flow": "session",
+                    "attempt": attempt + 1,
+                    "gen_track": gen_track,
+                },
+                output_json=raw,
+                is_valid=True,
+                user_id=user_id,
+            )
+            try:
+                generated = self.placement_validator.validate(raw, first_level, QUESTIONS_PER_LEVEL, track=gen_track)
+            except AgentValidationError as exc:
+                last_exc = exc
+                await self.agent_repo.log_run(
+                    agent_name=self.placement_validator.name,
+                    stage="validate",
+                    input_json={
+                        "level": first_level,
+                        "question_count": QUESTIONS_PER_LEVEL,
+                        "track": track,
+                        "attempt": attempt + 1,
+                    },
+                    output_json={"error": str(exc)},
+                    is_valid=False,
+                    user_id=user_id,
+                )
+                generated = None
+                continue
             await self.agent_repo.log_run(
                 agent_name=self.placement_validator.name,
                 stage="validate",
                 input_json={"level": first_level, "question_count": QUESTIONS_PER_LEVEL, "track": track},
-                output_json={"error": str(exc)},
-                is_valid=False,
+                output_json=generated,
+                is_valid=True,
                 user_id=user_id,
             )
-            raise
-        await self.agent_repo.log_run(
-            agent_name=self.placement_validator.name,
-            stage="validate",
-            input_json={"level": first_level, "question_count": QUESTIONS_PER_LEVEL, "track": track},
-            output_json=generated,
-            is_valid=True,
-            user_id=user_id,
-        )
+            break
+
+        if not generated:
+            raise last_exc or AgentValidationError("Could not start placement session after retries.")
+
         full_payload = {
             **generated,
             "placement_session": {
-                "track": track,
+                "track": ui_track,
                 "level_index": 0,
                 "current_level": first_level,
                 "cursor_in_level": 0,
@@ -360,7 +384,7 @@ class OrchestratorService:
             raise ValueError("Invalid placement data")
         questions = data.get("questions") or []
         sess = data.get("placement_session") or {}
-        if sess.get("track") != track:
+        if normalize_track(str(sess.get("track") or "")) != normalize_track(str(track or "")):
             raise ValueError("Track mismatch")
         if placement.score is not None:
             raise ValueError("Placement test already completed")
