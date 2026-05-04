@@ -1,13 +1,49 @@
 import axios from 'axios'
 import { applyGroqLimitsFromResponseHeaders } from '../lib/groqRateLimitsStore'
 
-/** e.g. VITE_API_ORIGIN=https://your-backend.railway.app (no trailing slash) — same user DB when backend uses cloud DATABASE_URL */
+/** Strip trailing slashes and accidental `/api` or `/api/v1` so we never build `.../api/v1/api/v1`. */
+function normalizeViteApiOrigin(raw: string | undefined | null): string {
+  if (raw == null) return ''
+  let s = String(raw).trim()
+  if (!s) return ''
+  s = s.replace(/\/+$/, '')
+  const lower = s.toLowerCase()
+  if (lower.endsWith('/api/v1')) s = s.slice(0, -'/api/v1'.length).replace(/\/+$/, '')
+  else if (lower.endsWith('/api')) s = s.slice(0, -'/api'.length).replace(/\/+$/, '')
+  return s
+}
+
+const resolvedOrigin = normalizeViteApiOrigin(import.meta.env.VITE_API_ORIGIN as string | undefined)
+
+/** e.g. VITE_API_ORIGIN=https://your-backend.railway.app (host only, no /api path) — same user DB when backend uses cloud DATABASE_URL */
 const API_BASE =
-  import.meta.env.VITE_API_ORIGIN != null && String(import.meta.env.VITE_API_ORIGIN).trim() !== ''
-    ? `${String(import.meta.env.VITE_API_ORIGIN).replace(/\/$/, '')}/api/v1`
-    : 'http://localhost:8000/api/v1'
+  resolvedOrigin !== '' ? `${resolvedOrigin}/api/v1` : 'http://localhost:8000/api/v1'
 
 export { API_BASE }
+
+/** User-facing message for failed requests (including Axios "Network Error" when the browser blocks or the server never answers). */
+export function describeApiError(err: unknown, fallback: string): string {
+  if (axios.isAxiosError(err)) {
+    const d = err.response?.data as { detail?: unknown } | undefined
+    const detail = d?.detail
+    if (typeof detail === 'string' && detail.trim()) return detail
+    if (Array.isArray(detail) && detail.length)
+      return detail.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join('; ')
+    if (!err.response && (err.code === 'ERR_NETWORK' || err.message === 'Network Error')) {
+      return (
+        `No response from API (${API_BASE}). ` +
+        'Start the backend, check VITE_API_ORIGIN, and if the site is not on localhost set backend CORS_EXTRA_ORIGINS to this page’s origin. ' +
+        'HTTPS pages cannot call http:// APIs (mixed content).'
+      )
+    }
+    if (typeof err.message === 'string' && err.message.trim()) return err.message
+  }
+  if (err instanceof Error && err.message.trim()) return err.message
+  return fallback
+}
+
+/** Placement runs many sequential LLM calls; default axios has no limit but proxies may still drop long requests. */
+const PLACEMENT_REQUEST_MS = 180_000
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -198,16 +234,24 @@ export interface PlacementFullResult {
 
 export const placementApi = {
   async start(track: string) {
-    const res = await api.post<StartPlacementResponse>('/placement/start', { track })
+    const res = await api.post<StartPlacementResponse>(
+      '/placement/start',
+      { track },
+      { timeout: PLACEMENT_REQUEST_MS }
+    )
     return res.data
   },
   async answer(placementId: number, track: string, questionId: string, answerIndex: number) {
-    const res = await api.post<AnswerPlacementResponse>('/placement/answer', {
-      placement_id: placementId,
-      track,
-      question_id: questionId,
-      answer_index: answerIndex,
-    })
+    const res = await api.post<AnswerPlacementResponse>(
+      '/placement/answer',
+      {
+        placement_id: placementId,
+        track,
+        question_id: questionId,
+        answer_index: answerIndex,
+      },
+      { timeout: PLACEMENT_REQUEST_MS }
+    )
     return res.data
   },
   async getResults() {

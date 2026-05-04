@@ -22,6 +22,39 @@ QA_SINGLE_TOKEN_MIN_SCORE = 0.04
 OUT_OF_SCOPE_TOPICS = {"asyncio", "metaclass", "c extensions", "threading internals"}
 # Any lesson must touch at least one of these (lowercased match) so scope stays pedagogical, not arbitrary chat.
 # Covers Python for Everybody–style topics beyond the intro chapter.
+# Deep learning lessons are not expected to mention Python-for-Everybody anchors; use ML terms instead.
+DL_SOURCE_KEY_CONCEPTS = frozenset(
+    {
+        "neural",
+        "layer",
+        "gradient",
+        "activation",
+        "loss",
+        "training",
+        "model",
+        "network",
+        "convolution",
+        "tensor",
+        "optimizer",
+        "epoch",
+        "backprop",
+        "weight",
+        "bias",
+        "dropout",
+        "batch",
+        "dataset",
+        "classification",
+        "embedding",
+        "attention",
+        "learning rate",
+        "regularization",
+        "overfit",
+        "parameter",
+        "inference",
+        "supervised",
+    }
+)
+
 SOURCE_KEY_CONCEPTS = frozenset(
     {
         "expressions",
@@ -76,14 +109,36 @@ def has_python3_hallucinations(answer: str) -> bool:
     return any(token in answer for token in disallowed)
 
 
-def validate_content_scope(markdown: str) -> tuple[bool, str]:
+def validate_content_scope(markdown: str, *, track: str = "python") -> tuple[bool, str]:
     lowered = markdown.lower()
+    track_key = (track or "python").strip().lower().replace("-", "_")
+    is_dl = track_key in {"deep_learning", "dl"}
+
     for topic in OUT_OF_SCOPE_TOPICS:
         if topic in lowered:
             return False, f"Out of scope topic detected: {topic}"
-    if not any(concept in lowered for concept in SOURCE_KEY_CONCEPTS):
-        return False, "Missing required source concept citation (no recognized Python topic terms)."
-    if "python for everybody" not in lowered:
+
+    concepts = DL_SOURCE_KEY_CONCEPTS if is_dl else SOURCE_KEY_CONCEPTS
+    if not any(concept in lowered for concept in concepts):
+        return False, (
+            "Missing required source concept citation (no recognized deep learning topic terms)."
+            if is_dl
+            else "Missing required source concept citation (no recognized Python topic terms)."
+        )
+
+    if is_dl:
+        if not any(
+            phrase in lowered
+            for phrase in (
+                "deep learning",
+                "deeplearningbook.org",
+                "goodfellow",
+                "bengio",
+                "courville",
+            )
+        ):
+            return False, "Lesson must cite the canonical deep learning source (Goodfellow et al.)."
+    elif "python for everybody" not in lowered:
         return False, "Lesson must cite the canonical source."
     return True, "ok"
 

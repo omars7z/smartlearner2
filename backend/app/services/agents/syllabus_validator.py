@@ -45,6 +45,16 @@ or {"valid": false, "error": "which lesson/unit failed and which rule number"}.
 If valid, echo the full units array unchanged."""
 
 
+def _strip_practical_prefix_title(title: str) -> str:
+    t = (title or "").strip()
+    low = t.lower()
+    prefix = "practical "
+    if low.startswith(prefix):
+        rest = t[len(prefix) :].strip()
+        return rest or t
+    return t
+
+
 def flatten_syllabus_payload(payload: dict) -> list[dict]:
     """
     Normalize syllabus JSON: either legacy flat `lessons[]` or hierarchical `units[]`
@@ -64,7 +74,9 @@ def flatten_syllabus_payload(payload: dict) -> list[dict]:
                 topic = str(sl.get("topic") or "").strip()
                 if not topic:
                     continue
-                title = str(sl.get("lesson_title") or sl.get("title") or topic).strip()
+                title = _strip_practical_prefix_title(
+                    str(sl.get("lesson_title") or sl.get("title") or topic).strip()
+                )
                 desc = str(sl.get("description") or "").strip()
                 lo = sl.get("learning_objectives")
                 row = {
@@ -75,7 +87,7 @@ def flatten_syllabus_payload(payload: dict) -> list[dict]:
                     "learning_objectives": lo if isinstance(lo, list) else [],
                     "rubric_concept": str(sl.get("rubric_concept") or "").strip(),
                 }
-                lit = str(sl.get("lesson_title") or sl.get("title") or "").strip()
+                lit = _strip_practical_prefix_title(str(sl.get("lesson_title") or sl.get("title") or "").strip())
                 if lit:
                     row["lesson_title"] = lit
                 cref = sl.get("chapter_ref")
@@ -98,9 +110,10 @@ def flatten_syllabus_payload(payload: dict) -> list[dict]:
         if not topic:
             continue
         lo = lesson.get("learning_objectives")
+        raw_title = str(lesson.get("lesson_title") or lesson.get("title") or topic).strip()
         lr = {
             "topic": topic,
-            "title": str(lesson.get("lesson_title") or lesson.get("title") or topic).strip(),
+            "title": _strip_practical_prefix_title(raw_title),
             "description": str(lesson.get("description") or "").strip(),
             "unit_title": str(lesson.get("unit_title") or "").strip() or None,
             "learning_objectives": lo if isinstance(lo, list) else [],

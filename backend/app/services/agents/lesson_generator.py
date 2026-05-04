@@ -60,7 +60,7 @@ class LessonGeneratorAgent(AgentPair):
                 "## Summary (bullets). "
                 "For python track, cite 'Python for Everybody' at least once. "
                 "For deep_learning track, cite 'Deep Learning' at least once and ground examples in lecture-note style practice. "
-                # "For deep_learning track, NEVER mention 'Python for Everybody', 'PY4E', or Py4E chapter references. "
+                "For deep_learning track, NEVER mention 'Python for Everybody', 'PY4E', or Py4E chapter references. "
                 "Ground explanations in the provided course-text context when relevant."
             ),
             user_prompt=(
@@ -69,6 +69,7 @@ class LessonGeneratorAgent(AgentPair):
                 + "Generate the full markdown lesson. Do not leave headings empty."
             ),
         )
+        # make markdown everytimr you generate a lesson to compress tokens 
         if is_dl and isinstance(payload, dict):
             md = str(payload.get("markdown") or "")
             if md:
@@ -86,6 +87,7 @@ class LessonGeneratorAgent(AgentPair):
         parent_topic: str,
         sub_title: str,
         source_excerpt: str,
+        failure_context: str | None = None,
         track: str = "python",
         level: str = "beginner",
         chapter_ref: int | None = None,
@@ -110,6 +112,12 @@ class LessonGeneratorAgent(AgentPair):
             "Prioritize clarity over breadth; stay within this sub-lesson slice.",
             f"Ground in this excerpt from their prior lesson attempt:\n{sanitize_prompt(source_excerpt[:12000])}",
         ]
+        if failure_context:
+            scope_bits.append(
+                "Personalize remediation using this assessment failure context. "
+                "Explicitly target the misconceptions shown here, then provide one corrected mini-example per misconception:\n"
+                + sanitize_prompt(failure_context[:6000])
+            )
         if chapter_ref is not None:
             scope_bits.append(
                 f"Deep Learning chapter reference (for grounding): chapter {chapter_ref}"
