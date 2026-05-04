@@ -221,6 +221,13 @@ export interface LessonDto {
   lesson_id: string
   title: string
   topic: string
+  topic_name?: string
+  duration_minutes?: number
+  order?: number
+  course_id?: number
+  parent_lesson_id?: number | null
+  is_sub_lesson?: boolean
+  sub_lessons?: LessonDto[]
 }
 
 export interface ModuleDto {
@@ -322,6 +329,9 @@ export interface StructuredLesson {
   title: string
   duration_minutes: number
   sections: LessonSection[]
+  sub_lessons?: LessonDto[]
+  is_parent_with_sub_lessons?: boolean
+  course_id?: number
 }
 
 export interface GetLessonResponse {
@@ -432,6 +442,7 @@ export interface QuickAssessmentGradeResponse {
   analytics?: AnalyticsPayload
   follow_up_explanation?: unknown
   next_action: string
+  updated_syllabus_modules?: ModuleDto[]
 }
 
 export const quickAssessmentApi = {

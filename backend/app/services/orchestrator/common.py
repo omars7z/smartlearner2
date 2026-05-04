@@ -41,15 +41,25 @@ def lesson_response_payload(
     duration_minutes: int,
     markdown: str,
     llm_used: bool,
+    sub_lessons: list[dict] | None = None,
+    is_parent_with_sub_lessons: bool = False,
+    course_id: int | None = None,
 ) -> dict:
+    lesson_obj: dict = {
+        "lesson_id": f"lesson_{lesson_id}",
+        "title": title,
+        "duration_minutes": duration_minutes,
+        "sections": [{"type": "markdown", "content": markdown}],
+    }
+    if course_id is not None:
+        lesson_obj["course_id"] = course_id
+    if is_parent_with_sub_lessons:
+        lesson_obj["is_parent_with_sub_lessons"] = True
+    if sub_lessons:
+        lesson_obj["sub_lessons"] = sub_lessons
     return {
         "status": "success",
-        "lesson": {
-            "lesson_id": f"lesson_{lesson_id}",
-            "title": title,
-            "duration_minutes": duration_minutes,
-            "sections": [{"type": "markdown", "content": markdown}],
-        },
+        "lesson": lesson_obj,
         "generated_in_ms": 0,
         "llm_used": llm_used,
     }

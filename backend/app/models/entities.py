@@ -52,6 +52,12 @@ class Lesson(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True)
+    parent_lesson_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lessons.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    is_sub_lesson: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     title: Mapped[str] = mapped_column(String(255))
     topic: Mapped[str] = mapped_column(String(100))
     order_index: Mapped[int] = mapped_column(Integer)

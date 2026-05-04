@@ -51,6 +51,10 @@ async def _ensure_lessons_table_columns(conn) -> None:
         await conn.execute(text("ALTER TABLE lessons ADD COLUMN metadata_json TEXT DEFAULT '{}'"))
     if "prerequisites_json" not in existing_cols:
         await conn.execute(text("ALTER TABLE lessons ADD COLUMN prerequisites_json TEXT DEFAULT '[]'"))
+    if "parent_lesson_id" not in existing_cols:
+        await conn.execute(text("ALTER TABLE lessons ADD COLUMN parent_lesson_id INTEGER REFERENCES lessons(id)"))
+    if "is_sub_lesson" not in existing_cols:
+        await conn.execute(text("ALTER TABLE lessons ADD COLUMN is_sub_lesson BOOLEAN DEFAULT 0 NOT NULL"))
 
 
 @asynccontextmanager

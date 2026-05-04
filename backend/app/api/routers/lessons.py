@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.core.errors import LessonLockedError
 from app.core.security import get_current_user_id
 from app.schemas.contracts import (
     LessonGenerationRequest,
@@ -24,6 +25,11 @@ async def generate_lesson(
 ) -> dict:
     try:
         return await service.generate_lesson_content(user_id, payload.lesson_id)
+    except LessonLockedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": LessonLockedError.default_message},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -36,6 +42,11 @@ async def get_lesson(
 ) -> dict:
     try:
         return await service.generate_lesson_content(user_id, parse_lesson_id(lesson_id))
+    except LessonLockedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": LessonLockedError.default_message},
+        )
     except ValueError as exc:
         if "Invalid literal" in str(exc) or "invalid literal" in str(exc):
             raise HTTPException(status_code=400, detail=f"Invalid lesson_id format: {lesson_id}")
@@ -54,6 +65,11 @@ async def generate_lesson_assessment(
 ) -> dict:
     try:
         return await service.generate_lesson_assessment(user_id=user_id, lesson_id=parse_lesson_id(lesson_id))
+    except LessonLockedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": LessonLockedError.default_message},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except AgentValidationError as exc:
@@ -72,6 +88,11 @@ async def submit_lesson_assessment(
             user_id=user_id,
             lesson_id=parse_lesson_id(lesson_id),
             answers=[a.model_dump() for a in payload.answers],
+        )
+    except LessonLockedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": LessonLockedError.default_message},
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -104,6 +125,11 @@ async def quick_assessment_generate(
             "topic": payload.topic,
             "questions": out_q,
         }
+    except LessonLockedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": LessonLockedError.default_message},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except AgentValidationError as exc:
@@ -137,6 +163,10 @@ async def quick_assessment_grade(
             next_action = "advance_to_next_lesson"
         elif result.get("locked") is True:
             next_action = "review_required_locked"
+        elif result.get("next_action") == "go_to_sub_lessons":
+            next_action = "go_to_sub_lessons"
+        elif result.get("next_action") == "retry_after_regeneration":
+            next_action = "retry_after_regeneration"
         else:
             next_action = "retry_after_regeneration"
         return {
@@ -145,10 +175,16 @@ async def quick_assessment_grade(
             "topic": payload.topic,
             "grading": {"correct_count": score, "total": 5, "per_question": []},
             "next_action": next_action,
+            "updated_syllabus_modules": result.get("updated_syllabus_modules"),
             "follow_up_explanation": {
                 "explanation": {"core_explanation": str(result.get("message") or "Assessment processed.")}
             },
         }
+    except LessonLockedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": LessonLockedError.default_message},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except AgentValidationError as exc:

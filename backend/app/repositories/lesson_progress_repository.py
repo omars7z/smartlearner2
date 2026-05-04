@@ -28,3 +28,13 @@ class LessonProgressRepository:
         await self.db.refresh(row)
         return row
 
+    async def get_passed_map(self, user_id: int, lesson_ids: list[int]) -> dict[int, bool]:
+        if not lesson_ids:
+            return {}
+        q = select(LessonProgress.lesson_id, LessonProgress.passed).where(
+            LessonProgress.user_id == user_id,
+            LessonProgress.lesson_id.in_(lesson_ids),
+        )
+        res = await self.db.execute(q)
+        return {int(r[0]): bool(r[1]) for r in res.all()}
+

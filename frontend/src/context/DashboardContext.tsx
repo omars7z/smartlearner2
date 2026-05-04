@@ -7,6 +7,7 @@ import {
   useState,
 } from 'react'
 import type { AnalyticsPayload, ModuleDto, LessonDto, PlacementFullResult } from '../services/api'
+import { normalizeSyllabusModules } from '../utils/syllabusOrder'
 
 const STORAGE_KEY = 'smartlearner-dashboard-state'
 
@@ -72,7 +73,9 @@ function loadState(): DashboardState {
       ...parsed,
       placementResult: parsed.placementResult ?? defaultState.placementResult,
       fullPlacementResult: parsed.fullPlacementResult ?? defaultState.fullPlacementResult,
-      syllabusModules: Array.isArray(parsed.syllabusModules) ? parsed.syllabusModules : [],
+      syllabusModules: normalizeSyllabusModules(
+        Array.isArray(parsed.syllabusModules) ? (parsed.syllabusModules as ModuleDto[]) : [],
+      ),
       knowledgeMap:
         parsed.knowledgeMap && typeof parsed.knowledgeMap === 'object'
           ? (parsed.knowledgeMap as Record<string, number>)
@@ -145,7 +148,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     setState((s) => ({
       ...s,
       syllabusGenerated: syllabusModules.length > 0,
-      syllabusModules,
+      syllabusModules: normalizeSyllabusModules(syllabusModules),
     }))
   }, [])
 

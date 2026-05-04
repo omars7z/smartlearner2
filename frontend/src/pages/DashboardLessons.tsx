@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { flattenLessonsInCourseOrder, normalizeSyllabusModules } from '../utils/syllabusOrder'
 import { useLocation, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -17,7 +18,15 @@ import {
 
 export default function DashboardLessons() {
   const { accentPrimary, accentSecondary } = useAccentTheme()
-  const { syllabusModules, currentLesson, setCurrentLesson, setCurrentTopic, placementResult, mergeAnalyticsFromQA } = useDashboard()
+  const {
+    syllabusModules,
+    currentLesson,
+    setCurrentLesson,
+    setCurrentTopic,
+    placementResult,
+    mergeAnalyticsFromQA,
+    setSyllabusModules,
+  } = useDashboard()
   const navigate = useNavigate()
   const location = useLocation()
   const stateLesson = (location.state as { lesson?: LessonDto })?.lesson
@@ -38,14 +47,11 @@ export default function DashboardLessons() {
   const [resultModalPassed, setResultModalPassed] = useState(false)
   const [resultModalMessage, setResultModalMessage] = useState('')
   const [resultModalNextLesson, setResultModalNextLesson] = useState<LessonDto | null>(null)
+  const [lessonLockMessage, setLessonLockMessage] = useState<string | null>(null)
   const lessonTopRef = useRef<HTMLDivElement | null>(null)
 
-  const allLessons: { lesson: LessonDto; module: ModuleDto }[] = []
-  syllabusModules.forEach((mod) => {
-    if (mod.lessons) {
-      mod.lessons.forEach((l) => allLessons.push({ lesson: l, module: mod }))
-    }
-  })
+  const syllabusOrdered = useMemo(() => normalizeSyllabusModules(syllabusModules), [syllabusModules])
+  const orderedFlatLessons = useMemo(() => flattenLessonsInCourseOrder(syllabusModules), [syllabusModules])
   const hasSyllabus = syllabusModules.length > 0
 
   const displayLesson = selectedLesson ?? stateLesson ?? currentLesson
@@ -72,10 +78,12 @@ export default function DashboardLessons() {
   useEffect(() => {
     if (!displayLesson) {
       setLesson(null)
+      setLessonLockMessage(null)
       return
     }
     setContentLoading(true)
     setLesson(null)
+    setLessonLockMessage(null)
     lessonsApi
       .getLesson(displayLesson.lesson_id, {
         topic: resolvedTopic,
@@ -84,7 +92,18 @@ export default function DashboardLessons() {
         durationMinutes: (displayLesson as any).duration_minutes ?? 20,
       })
       .then((data) => setLesson(data.lesson))
-      .catch(() => setLesson(null))
+      .catch((err: unknown) => {
+        const status = (err as { response?: { status?: number; data?: { detail?: unknown } } })?.response?.status
+        const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+        if (status === 403) {
+          const msg =
+            typeof detail === 'object' && detail != null && 'error' in detail && typeof (detail as { error?: string }).error === 'string'
+              ? (detail as { error: string }).error
+              : 'Lesson locked. Complete previous lesson first.'
+          setLessonLockMessage(msg)
+        }
+        setLesson(null)
+      })
       .finally(() => setContentLoading(false))
   }, [displayLesson?.lesson_id, displayLesson?.title, resolvedTopic, level])
 
@@ -269,37 +288,71 @@ export default function DashboardLessons() {
           <p className="text-xs text-[color:var(--text-muted)]">No lessons in syllabus.</p>
         ) : (
           <div className="space-y-4">
-            {syllabusModules.map((mod) => (
+            {syllabusOrdered.map((mod) => (
               <div key={mod.module_id}>
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-[color:var(--text-muted)] mb-2">
                   {mod.title}
                 </p>
                 <ul className="space-y-1">
-                  {(mod.lessons || []).map((lesson) => (
-                    <li key={lesson.lesson_id}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedLesson(lesson)
-                          setCurrentLesson(lesson)
-                        }}
-                        className={`w-full text-left rounded-lg px-3 py-2 text-xs transition-colors ${
-                          displayLesson?.lesson_id === lesson.lesson_id
-                            ? 'text-white'
-                            : 'text-[color:var(--text-secondary)] hover:bg-white/10'
-                        }`}
-                        style={
-                          displayLesson?.lesson_id === lesson.lesson_id
-                            ? {
-                                background: `linear-gradient(135deg, ${accentPrimary}, ${accentSecondary})`,
-                              }
-                            : undefined
-                        }
-                      >
-                        <span className="font-medium leading-snug">{lesson.title}</span>
-                      </button>
-                    </li>
-                  ))}
+                  {(mod.lessons || []).map((lesson) => {
+                    const subActive = lesson.sub_lessons?.some((s) => s.lesson_id === displayLesson?.lesson_id)
+                    const active = displayLesson?.lesson_id === lesson.lesson_id || subActive
+                    return (
+                      <li key={lesson.lesson_id}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedLesson(lesson)
+                            setCurrentLesson(lesson)
+                          }}
+                          className={`w-full text-left rounded-lg px-3 py-2 text-xs transition-colors ${
+                            active ? 'text-white' : 'text-[color:var(--text-secondary)] hover:bg-white/10'
+                          }`}
+                          style={
+                            active
+                              ? {
+                                  background: `linear-gradient(135deg, ${accentPrimary}, ${accentSecondary})`,
+                                }
+                              : undefined
+                          }
+                        >
+                          <span className="font-medium leading-snug block truncate" title={lesson.title}>
+                            {lesson.title}
+                          </span>
+                          {lesson.sub_lessons?.length ? (
+                            <span className="text-[10px] opacity-80 mt-0.5 block">
+                              {lesson.sub_lessons.length} parts
+                            </span>
+                          ) : null}
+                        </button>
+                        {lesson.sub_lessons?.length ? (
+                          <ul className="mt-1 ml-2 space-y-0.5 border-l border-white/10 pl-2">
+                            {lesson.sub_lessons.map((sub, si) => (
+                              <li key={sub.lesson_id}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedLesson(sub)
+                                    setCurrentLesson(sub)
+                                  }}
+                                  className={`w-full text-left rounded-md px-2 py-1.5 text-[11px] transition-colors ${
+                                    displayLesson?.lesson_id === sub.lesson_id
+                                      ? 'text-sky-200 bg-white/10'
+                                      : 'text-[color:var(--text-muted)] hover:bg-white/5'
+                                  }`}
+                                >
+                                  <span className="text-sky-400/90 font-medium">Part {si + 1}</span>
+                                  <span className="block truncate opacity-90" title={sub.title}>
+                                    {sub.title.replace(/^\(part\s+\d+\/\d+\)\s*/i, '').trim() || sub.title}
+                                  </span>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </li>
+                    )
+                  })}
                 </ul>
               </div>
             ))}
@@ -343,9 +396,16 @@ export default function DashboardLessons() {
             <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300">
               {resolvedTopic ?? 'Lesson'}
             </span>
-            <h1 className="text-2xl font-bold text-[color:var(--text-primary)] mt-2 mb-4">
-              {displayLesson.title}
-            </h1>
+            <div className="flex flex-wrap items-center gap-2 mt-2 mb-4">
+              <h1 className="text-2xl font-bold text-[color:var(--text-primary)] flex-1 min-w-0 break-words">
+                {displayLesson.title}
+              </h1>
+              {displayLesson.is_sub_lesson ? (
+                <span className="text-[10px] shrink-0 px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30">
+                  Focused part
+                </span>
+              ) : null}
+            </div>
             <div
               ref={lessonTopRef}
               className="rounded-xl p-6"
@@ -353,6 +413,8 @@ export default function DashboardLessons() {
             >
               {contentLoading ? (
                 <p className="text-[color:var(--text-muted)]">Loading content…</p>
+              ) : lessonLockMessage ? (
+                <p className="text-sm text-amber-300 leading-relaxed">{lessonLockMessage}</p>
               ) : lesson ? (
                 <>
                   <div className="flex items-center justify-between mb-4">
@@ -360,10 +422,38 @@ export default function DashboardLessons() {
                       ~{lesson.duration_minutes} min read · Level: {level}
                     </span>
                     <span className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-300">
-                      Lesson
+                      {lesson.is_parent_with_sub_lessons ? 'Topic overview' : 'Lesson'}
                     </span>
                   </div>
                   {lesson.sections?.map(renderSection)}
+
+                  {lesson.sub_lessons?.length ? (
+                    <div
+                      className="mt-8 rounded-xl border p-5"
+                      style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card)' }}
+                    >
+                      <h3 className="text-sm font-semibold text-[color:var(--text-primary)] mb-3">Parts to complete</h3>
+                      <p className="text-xs text-[color:var(--text-muted)] mb-3">
+                        Each part has its own short lesson and quiz. Work through them in order.
+                      </p>
+                      <div className="flex flex-col gap-2">
+                        {lesson.sub_lessons.map((sub, si) => (
+                          <button
+                            key={sub.lesson_id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedLesson(sub)
+                              setCurrentLesson(sub)
+                            }}
+                            className="text-left rounded-lg px-3 py-2 text-xs border border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10 text-[color:var(--text-primary)]"
+                          >
+                            <span className="font-semibold text-sky-300">Part {si + 1}</span>
+                            <span className="block text-[color:var(--text-secondary)] mt-0.5">{sub.title}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
 
                   <div
                     className="mt-8 rounded-xl border p-5"
@@ -376,7 +466,12 @@ export default function DashboardLessons() {
                       </h2>
                     </div>
 
-                    {!assessmentOpen ? (
+                    {lesson.is_parent_with_sub_lessons ? (
+                      <p className="text-sm text-[color:var(--text-secondary)]">
+                        Take the quiz on each part above. This overview does not have its own assessment until all parts
+                        are passed.
+                      </p>
+                    ) : !assessmentOpen ? (
                       <button
                         type="button"
                         onClick={async () => {
@@ -468,14 +563,42 @@ export default function DashboardLessons() {
                                 }
 
                                 if (resp.next_action === 'advance_to_next_lesson') {
-                                  const idx = allLessons.findIndex((x) => x.lesson.lesson_id === displayLesson.lesson_id)
-                                  const next = idx >= 0 ? allLessons[idx + 1] : null
+                                  const idx = orderedFlatLessons.findIndex(
+                                    (x) => x.lesson.lesson_id === displayLesson.lesson_id,
+                                  )
+                                  const next = idx >= 0 ? orderedFlatLessons[idx + 1] : null
                                   setResultModalPassed(true)
                                   setResultModalNextLesson(next?.lesson ?? null)
                                   setResultModalMessage(
                                     followup?.explanation?.core_explanation
                                       ? String(followup.explanation.core_explanation)
                                       : 'Great job! You passed the assessment.'
+                                  )
+                                  setResultModalOpen(true)
+                                } else if (resp.next_action === 'go_to_sub_lessons') {
+                                  const mods = resp.updated_syllabus_modules
+                                  if (mods?.length) {
+                                    setSyllabusModules(mods as ModuleDto[])
+                                    const pid = displayLesson.lesson_id
+                                    outer: for (const mod of mods) {
+                                      for (const les of mod.lessons || []) {
+                                        if (les.lesson_id === pid && les.sub_lessons?.length) {
+                                          const first = les.sub_lessons[0]
+                                          setSelectedLesson(first)
+                                          setCurrentLesson(first)
+                                          break outer
+                                        }
+                                      }
+                                    }
+                                  }
+                                  setAssessmentOpen(false)
+                                  setAssessmentQuestions([])
+                                  setAssessmentAnswers({})
+                                  setResultModalPassed(false)
+                                  setResultModalMessage(
+                                    followup?.explanation?.core_explanation
+                                      ? String(followup.explanation.core_explanation)
+                                      : 'This topic was split into smaller lessons. Start with part 1 in the sidebar.'
                                   )
                                   setResultModalOpen(true)
                                 } else if (resp.next_action === 'retry_after_regeneration') {
@@ -627,7 +750,7 @@ export default function DashboardLessons() {
                   className="rounded-xl px-3 py-2 text-sm font-semibold text-white"
                   style={{ background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})` }}
                 >
-                  Review regenerated lesson
+                  Continue
                 </button>
               )}
             </div>

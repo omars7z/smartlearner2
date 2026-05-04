@@ -44,6 +44,12 @@ from app.services.orchestrator.placement import (
     score_to_level as _score_to_level,
     set_placement_questions_json as _set_placement_questions_json,
 )
+from app.core.errors import LessonLockedError
+from app.services.orchestrator.lesson_access import (
+    build_progression_blocks,
+    can_user_access_lesson,
+    split_markdown_into_sub_focuses,
+)
 from app.services.orchestrator.syllabus import (
     build_local_syllabus_payload as _build_local_syllabus_payload,
     topic_slug as _topic_slug,
@@ -78,6 +84,30 @@ class OrchestratorService:
         self.analytics_agent = AnalyticsAgent()
         self.assessment_service = AssessmentService(self.llm)
         self.lesson_progress_repo = LessonProgressRepository(db)
+
+    async def _course_progression_context(self, user_id: int, course_id: int):
+        lessons = await self.course_repo.list_lessons_by_course(course_id)
+        blocks = build_progression_blocks(lessons)
+        pmap = await self.lesson_progress_repo.get_passed_map(user_id, [L.id for L in lessons])
+        return lessons, blocks, pmap
+
+    async def _ensure_lesson_accessible(self, user_id: int, course_id: int, lesson_id: int) -> None:
+        _, blocks, pmap = await self._course_progression_context(user_id, course_id)
+        if not can_user_access_lesson(lesson_id=lesson_id, blocks=blocks, passed_map=pmap):
+            raise LessonLockedError()
+
+    async def _sync_parent_passed_if_subs_done(self, user_id: int, parent_lesson_id: int | None) -> None:
+        if not parent_lesson_id:
+            return
+        children = await self.course_repo.get_child_lessons(parent_lesson_id)
+        if not children:
+            return
+        pmap = await self.lesson_progress_repo.get_passed_map(user_id, [c.id for c in children])
+        if not all(pmap.get(c.id) for c in children):
+            return
+        pp = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=parent_lesson_id)
+        pp.passed = True
+        await self.lesson_progress_repo.save(pp)
 
     @staticmethod
     def _normalize_track_key(track: str | None) -> str:
@@ -644,10 +674,15 @@ class OrchestratorService:
             return ut or "__single__"
 
         for unit_label, group in groupby(sorted_lessons, key=_module_key):
-            rows = list(group)
+            chunk = list(group)
+            rows = [r for r in chunk if r.parent_lesson_id is None]
+            if not rows:
+                continue
             mod_idx += 1
             unit_title = rows[0].unit_title if rows[0].unit_title else None
-            if unit_label == "__single__" and len(sorted_lessons) == len(rows):
+            if unit_label == "__single__" and len([x for x in sorted_lessons if x.parent_lesson_id is None]) == len(
+                rows
+            ):
                 mod_title = course.title
                 if normalize_track(track) in {"deep_learning", "dl"}:
                     mod_desc = f"{level_str.replace('_', ' ').title()} track — Deep Learning scope."
@@ -657,26 +692,36 @@ class OrchestratorService:
                 mod_title = unit_title or f"Module {mod_idx}"
                 mod_desc = f"Unit in {course.title}."
 
+            def _lesson_payload(les) -> dict:
+                base = {
+                    "lesson_id": f"lesson_{les.id}",
+                    "id": f"lesson_{les.id}",
+                    "title": les.title,
+                    "topic": les.topic,
+                    "topic_name": les.topic,
+                    "duration_minutes": lesson_duration_minutes,
+                    "order": les.order_index,
+                    "course_id": course.id,
+                    "parent_lesson_id": les.parent_lesson_id,
+                    "is_sub_lesson": bool(les.is_sub_lesson),
+                }
+                kids = sorted(
+                    [x for x in sorted_lessons if x.parent_lesson_id == les.id],
+                    key=lambda x: x.order_index,
+                )
+                if kids:
+                    base["sub_lessons"] = [_lesson_payload(k) for k in kids]
+                return base
+
             modules.append({
                 "id": f"module_{mod_idx}",
                 "module_id": f"module_{mod_idx}",
                 "title": mod_title,
                 "description": mod_desc,
-                "topics": list({r.topic for r in rows}),
-                "duration": f"{len(rows) * lesson_duration_minutes} min",
+                "topics": list(dict.fromkeys([r.topic for r in chunk])),
+                "duration": f"{len(chunk) * lesson_duration_minutes} min",
                 "target_level": level_str,
-                "lessons": [
-                    {
-                        "lesson_id": f"lesson_{les.id}",
-                        "id": f"lesson_{les.id}",
-                        "title": les.title,
-                        "topic": les.topic,
-                        "topic_name": les.topic,
-                        "duration_minutes": lesson_duration_minutes,
-                        "order": les.order_index,
-                    }
-                    for les in rows
-                ],
+                "lessons": [_lesson_payload(les) for les in rows],
             })
         
         return {
@@ -702,25 +747,60 @@ class OrchestratorService:
         if lesson is None:
             raise ValueError("Lesson not found")
 
-        # Get level from parent course (used by both cached and freshly generated responses)
+        course = await self.db.get(Course, lesson.course_id) if lesson.course_id else None
+        if course is None or course.user_id != user_id:
+            raise ValueError("Lesson not found")
+
+        await self._ensure_lesson_accessible(user_id, lesson.course_id, lesson.id)
+
         level: str = "beginner"
         course_track = "python"
         chapter_ref: int | None = None
         duration_minutes = _duration_minutes_for_level(level)
         try:
-            if lesson.course_id:
-                course = await self.db.get(Course, lesson.course_id)
-                if course and course.level:
-                    level = _normalized_course_level(course.level)
-                    duration_minutes = _duration_minutes_for_level(level)
-                if course:
-                    course_track = _track_from_course_title(getattr(course, "title", None))
+            if course.level:
+                level = _normalized_course_level(course.level)
+                duration_minutes = _duration_minutes_for_level(level)
+            course_track = _track_from_course_title(getattr(course, "title", None))
         except Exception:
             pass
 
-        # Serve persisted lesson content first. This preserves adapted lesson
-        # variants generated after failed assessments instead of overwriting them
-        # on every lesson view refresh.
+        children = await self.course_repo.get_child_lessons(lesson.id)
+        if children:
+            overview = (lesson.markdown_content or "").strip()
+            if not overview or not _is_dynamic_lesson_markdown(overview):
+                overview = (
+                    "## Focused review\n\n"
+                    "This topic is split into smaller steps. Open each part below in order and pass its quiz "
+                    "before moving on.\n\n"
+                    + "\n".join(f"{i + 1}. **{c.title}**" for i, c in enumerate(children))
+                )
+            sub_payload = [
+                {
+                    "lesson_id": f"lesson_{c.id}",
+                    "id": f"lesson_{c.id}",
+                    "title": c.title,
+                    "topic": c.topic,
+                    "topic_name": c.topic,
+                    "duration_minutes": duration_minutes,
+                    "order": c.order_index,
+                    "course_id": lesson.course_id,
+                    "parent_lesson_id": c.parent_lesson_id,
+                    "is_sub_lesson": True,
+                }
+                for c in children
+            ]
+            return _lesson_response_payload(
+                lesson_id=lesson.id,
+                title=lesson.title,
+                duration_minutes=duration_minutes,
+                markdown=overview,
+                llm_used=False,
+                sub_lessons=sub_payload,
+                is_parent_with_sub_lessons=True,
+                course_id=lesson.course_id,
+            )
+
         existing_markdown = (lesson.markdown_content or "").strip()
         if existing_markdown and _is_dynamic_lesson_markdown(existing_markdown):
             return _lesson_response_payload(
@@ -729,9 +809,9 @@ class OrchestratorService:
                 duration_minutes=duration_minutes,
                 markdown=existing_markdown,
                 llm_used=False,
+                course_id=lesson.course_id,
             )
 
-        # Get chapter_ref from lesson metadata if available
         chapter_ref = _extract_chapter_ref(getattr(lesson, "metadata_json", None))
 
         raw_lesson = self.lesson_generator.generate(
@@ -785,6 +865,7 @@ class OrchestratorService:
             duration_minutes=duration_minutes,
             markdown=md,
             llm_used=True,
+            course_id=lesson.course_id,
         )
 
     async def answer_question(
@@ -920,12 +1001,91 @@ class OrchestratorService:
         result = run_exam_code_in_sandbox(code)
         return {"stdout": result.stdout, "stderr": result.stderr, "return_code": result.return_code}
 
+    async def _remediation_split_root_lesson(self, user_id: int, lesson) -> list[dict]:
+        """Persist 2–4 sub-lessons after a failed root-level assessment."""
+        course = lesson.course
+        if course is None:
+            raise ValueError("Lesson not found")
+        level = _normalized_course_level(course.level)
+        existing_children = await self.course_repo.get_child_lessons(lesson.id)
+        if existing_children:
+            refreshed = await self.course_repo.list_lessons_by_course(lesson.course_id)
+            return self.course_repo.build_syllabus_modules_from_lessons(
+                course.title,
+                refreshed,
+                lesson_duration_minutes=_duration_minutes_for_level(level),
+                target_level=level,
+            )
+        old_md = (lesson.markdown_content or "").strip()
+        parts, titles = split_markdown_into_sub_focuses(old_md)
+        track = _track_from_course_title(getattr(course, "title", None))
+        chapter_ref = _extract_chapter_ref(lesson.metadata_json)
+        child_rows: list[dict] = []
+        for i, (snippet, stitle) in enumerate(zip(parts, titles)):
+            raw_sl = self.lesson_generator.generate_sub_lesson(
+                parent_topic=lesson.topic,
+                sub_title=f"{lesson.title} — {stitle}",
+                source_excerpt=snippet,
+                track=track,
+                level=level,
+                chapter_ref=chapter_ref,
+            )
+            await self.agent_repo.log_run(
+                agent_name=self.lesson_generator.name,
+                stage="generate_sub_lesson",
+                input_json={"parent_lesson_id": lesson.id, "part_index": i + 1},
+                output_json=raw_sl,
+                is_valid=True,
+                user_id=user_id,
+            )
+            gen_sl = self.lesson_validator.validate(raw_sl, track=track)
+            slug_base = (lesson.topic or "topic").replace(" ", "_")[:40]
+            topic_slug = f"{slug_base}_p{i + 1}_{lesson.id}"[:100]
+            meta = dict(lesson.metadata_json or {})
+            meta["sub_lesson_index"] = i + 1
+            meta["parent_topic"] = lesson.topic
+            if chapter_ref is not None:
+                meta["chapter_ref"] = chapter_ref
+            child_rows.append(
+                {
+                    "title": f"{lesson.title} (part {i + 1}/{len(parts)})"[:255],
+                    "topic": topic_slug,
+                    "markdown_content": str(gen_sl.get("markdown") or ""),
+                    "metadata_json": meta,
+                }
+            )
+
+        n = len(titles)
+        overview = (
+            "## Focused review\n\n"
+            "This topic was split into smaller steps after your last assessment. "
+            "Open each part below **in order** and pass its quiz before moving on.\n\n"
+            + "\n".join(f"{i + 1}. **{t}**" for i, t in enumerate(titles))
+            + f"\n\n_Total parts: {n}._"
+        )
+        await self.course_repo.persist_sub_lesson_split(
+            lesson,
+            overview_markdown=overview,
+            children=child_rows,
+        )
+        refreshed = await self.course_repo.list_lessons_by_course(lesson.course_id)
+        return self.course_repo.build_syllabus_modules_from_lessons(
+            course.title,
+            refreshed,
+            lesson_duration_minutes=_duration_minutes_for_level(level),
+            target_level=level,
+        )
+
     async def generate_lesson_assessment(self, user_id: int, lesson_id: int) -> dict:
         lesson = await self.course_repo.get_lesson_with_course(lesson_id)
         if lesson is None:
             raise ValueError("Lesson not found")
         if lesson.course is None or lesson.course.user_id != user_id:
             raise ValueError("Lesson not found")
+        await self._ensure_lesson_accessible(user_id, lesson.course_id, lesson.id)
+        subs = await self.course_repo.get_child_lessons(lesson.id)
+        if subs and not lesson.is_sub_lesson:
+            raise ValueError("Assessments run on each part below. Open the first sub-lesson.")
         progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
         level = _normalized_course_level(lesson.course.level)
         previous_questions = (
@@ -961,6 +1121,12 @@ class OrchestratorService:
             raise ValueError("Lesson not found")
         if lesson.course is None or lesson.course.user_id != user_id:
             raise ValueError("Lesson not found")
+        await self._ensure_lesson_accessible(user_id, lesson.course_id, lesson.id)
+        subs_blocking = await self.course_repo.get_child_lessons(lesson.id)
+        if subs_blocking and not lesson.is_sub_lesson:
+            pmap0 = await self.lesson_progress_repo.get_passed_map(user_id, [c.id for c in subs_blocking])
+            if not all(pmap0.get(c.id) for c in subs_blocking):
+                raise ValueError("Complete each sub-lesson for this topic before submitting here.")
         progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
         questions = progress.current_questions_json or []
         if not isinstance(questions, list) or len(questions) != 5:
@@ -1004,6 +1170,7 @@ class OrchestratorService:
         if score >= 4:
             progress.passed = True
             await self.lesson_progress_repo.save(progress)
+            await self._sync_parent_passed_if_subs_done(user_id, lesson.parent_lesson_id)
             next_lesson_id = await self.course_repo.get_next_lesson_id(lesson)
             return {"passed": True, "score": score, "next_lesson": next_lesson_id}
 
@@ -1023,42 +1190,66 @@ class OrchestratorService:
                 "message": "You have reached the maximum attempts. Please review the lesson before retrying.",
             }
 
-        adaptation = (
-            "Use simpler explanation, more examples, beginner-friendly style."
-            if attempt_number == 1
-            else "Use even simpler explanation, step-by-step breakdown, and focus on weak concepts."
-        )
         level = _normalized_course_level(lesson.course.level)
         chapter_ref = _extract_chapter_ref(lesson.metadata_json)
-        raw_lesson = self.lesson_generator.generate(
-            topic=lesson.topic,
-            lesson_title=lesson.title,
-            track=_track_from_course_title(getattr(lesson.course, "title", None)),
-            level=level,
-            chapter_ref=chapter_ref,
-            adaptation_instructions=adaptation,
-        )
-        generated = self.lesson_validator.validate(
-            raw_lesson,
-            track=_track_from_course_title(getattr(lesson.course, "title", None)),
-        )
-        regenerated_markdown = str(generated.get("markdown") or "")
-        await self.course_repo.update_lesson_content(lesson.id, regenerated_markdown)
-        # Immediately prepare a fresh assessment set from the regenerated lesson content.
-        new_questions = await self.assessment_service.generate_assessment(
-            topic=lesson.topic,
-            level=level,
-            lesson_title=lesson.title,
-            lesson_markdown=regenerated_markdown,
-            attempt_number=max(1, progress.attempts + 1),
-            previous_questions=questions if isinstance(questions, list) else [],
-        )
-        progress.current_questions_json = _assign_question_ids(new_questions)
+        track = _track_from_course_title(getattr(lesson.course, "title", None))
+
+        if lesson.is_sub_lesson:
+            raw_sl = self.lesson_generator.generate_sub_lesson(
+                parent_topic=lesson.topic,
+                sub_title=lesson.title,
+                source_excerpt=(lesson.markdown_content or "")[:12000],
+                track=track,
+                level=level,
+                chapter_ref=chapter_ref,
+            )
+            gen_sl = self.lesson_validator.validate(raw_sl, track=track)
+            regenerated_markdown = str(gen_sl.get("markdown") or "")
+            await self.course_repo.update_lesson_content(lesson.id, regenerated_markdown)
+            new_questions = await self.assessment_service.generate_assessment(
+                topic=lesson.topic,
+                level=level,
+                lesson_title=lesson.title,
+                lesson_markdown=regenerated_markdown,
+                attempt_number=max(1, progress.attempts + 1),
+                previous_questions=questions if isinstance(questions, list) else [],
+            )
+            progress.current_questions_json = _assign_question_ids(new_questions)
+            await self.lesson_progress_repo.save(progress)
+            return {
+                "passed": False,
+                "locked": False,
+                "score": score,
+                "attempts": progress.attempts,
+                "message": f"Assessment failed. This part was expanded for attempt {attempt_number + 1}.",
+                "next_action": "retry_after_regeneration",
+                "sub_lessons_created": False,
+            }
+
+        kids_exist = await self.course_repo.get_child_lessons(lesson.id)
+        if kids_exist:
+            await self.lesson_progress_repo.save(progress)
+            return {
+                "passed": False,
+                "locked": False,
+                "score": score,
+                "attempts": progress.attempts,
+                "message": "Use the numbered sub-lessons for this topic.",
+                "next_action": "go_to_sub_lessons",
+                "sub_lessons_created": False,
+            }
+
+        updated_modules = await self._remediation_split_root_lesson(user_id, lesson)
+        progress.current_questions_json = []
+        progress.attempts = 0
         await self.lesson_progress_repo.save(progress)
         return {
             "passed": False,
             "locked": False,
             "score": score,
             "attempts": progress.attempts,
-            "message": f"Assessment failed. Lesson regenerated for attempt {attempt_number + 1}.",
+            "message": "Assessment failed. This topic was split into smaller lessons—start with part 1.",
+            "next_action": "go_to_sub_lessons",
+            "sub_lessons_created": True,
+            "updated_syllabus_modules": updated_modules,
         }

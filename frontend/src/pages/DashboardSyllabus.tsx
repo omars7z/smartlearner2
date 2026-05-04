@@ -290,41 +290,71 @@ export default function DashboardSyllabus() {
                         className="border-t overflow-hidden"
                         style={{ borderColor: 'var(--border-color)' }}
                       >
-                        <div className="p-4 pt-2 space-y-2">
+                        <div className="p-4 pt-2 space-y-3">
                           {module.lessons.map((lesson) => (
                             <div
                               key={lesson.lesson_id}
-                              className="flex items-center justify-between gap-3 py-2 px-3 rounded-xl hover:bg-white/5 lesson-item"
+                              className="rounded-xl border border-white/5 overflow-hidden"
                               style={{ backgroundColor: 'var(--bg-primary)' }}
                             >
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium text-[color:var(--text-primary)]">
-                                  {lesson.title}
-                                </p>
-                                <div className="flex items-center gap-2 mt-0.5">
-                                  <span className="text-[10px] text-[color:var(--text-muted)]">
-                                    {lesson.topic}
-                                  </span>
-                                  {(lesson as any)?.duration_minutes != null && (
-                                    <span className="text-[10px] text-[color:var(--text-muted)]">
-                                      {Number((lesson as any).duration_minutes)} min
-                                    </span>
-                                  )}
+                              <div className="flex items-center justify-between gap-3 py-2 px-3 hover:bg-white/5 lesson-item">
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-medium text-[color:var(--text-primary)]">
+                                    {lesson.title}
+                                  </p>
+                                  <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                                    <span className="text-[10px] text-[color:var(--text-muted)]">{lesson.topic}</span>
+                                    {(lesson as any)?.duration_minutes != null && (
+                                      <span className="text-[10px] text-[color:var(--text-muted)]">
+                                        {Number((lesson as any).duration_minutes)} min
+                                      </span>
+                                    )}
+                                    {lesson.sub_lessons?.length ? (
+                                      <span className="text-[10px] text-sky-300/90">
+                                        {lesson.sub_lessons.length} focused parts
+                                      </span>
+                                    ) : null}
+                                  </div>
                                 </div>
+                                <span className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-300 type-badge shrink-0">
+                                  {(lesson as { type?: string }).type ?? 'Lesson'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => navigate('/dashboard/lessons', { state: { lesson } })}
+                                  className="shrink-0 rounded-lg py-1.5 px-3 text-xs font-semibold text-white flex items-center gap-1"
+                                  style={{
+                                    background: `linear-gradient(135deg, ${accentPrimary}, ${accentSecondary})`,
+                                  }}
+                                >
+                                  Start <Play className="h-3 w-3" />
+                                </button>
                               </div>
-                              <span className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-300 type-badge">
-                                {(lesson as { type?: string }).type ?? 'Lesson'}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => navigate('/dashboard/lessons', { state: { lesson } })}
-                                className="shrink-0 rounded-lg py-1.5 px-3 text-xs font-semibold text-white flex items-center gap-1"
-                                style={{
-                                  background: `linear-gradient(135deg, ${accentPrimary}, ${accentSecondary})`,
-                                }}
-                              >
-                                Start <Play className="h-3 w-3" />
-                              </button>
+                              {lesson.sub_lessons?.length ? (
+                                <ul className="border-t border-white/5 px-3 py-2 space-y-1.5" style={{ borderColor: 'var(--border-color)' }}>
+                                  {lesson.sub_lessons.map((sub, si) => (
+                                    <li
+                                      key={sub.lesson_id}
+                                      className="flex items-center justify-between gap-2 text-xs text-[color:var(--text-secondary)]"
+                                    >
+                                      <span className="min-w-0 truncate">
+                                        <span className="text-sky-400 font-medium">Part {si + 1}</span>{' '}
+                                        {sub.title}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => navigate('/dashboard/lessons', { state: { lesson: sub } })}
+                                        className="shrink-0 rounded-md py-1 px-2 text-[10px] font-semibold text-white"
+                                        style={{
+                                          background: `linear-gradient(135deg, ${accentPrimary}, ${accentSecondary})`,
+                                        }}
+                                      >
+                                        Start
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : null}
                             </div>
                           ))}
                         </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { Lock } from 'lucide-react'
@@ -7,6 +7,7 @@ import { useToast } from '../context/ToastContext'
 import { useAccentTheme } from '../hooks/useAccentTheme'
 import { examsApi } from '../services/api'
 import type { ExamQuestionDto } from '../services/api'
+import { flattenLessonsInCourseOrder } from '../utils/syllabusOrder'
 
 type ExamState = 'setup' | 'generating' | 'taking' | 'results'
 
@@ -86,14 +87,17 @@ export default function DashboardExams() {
   const [results, setResults] = useState<ExamResults | null>(null)
   const [currentLessonId, setCurrentLessonId] = useState('py-1-1')
 
-  const lessonsFromSyllabus = syllabusModules.flatMap((m) => m.lessons ?? [])
+  const lessonsFromSyllabus = useMemo(
+    () => flattenLessonsInCourseOrder(syllabusModules).map((e) => e.lesson),
+    [syllabusModules],
+  )
 
   useEffect(() => {
-    if (lessonsFromSyllabus.length) {
-      setLessonId(lessonsFromSyllabus[0].lesson_id)
-      setCurrentLessonId(lessonsFromSyllabus[0].lesson_id)
-    }
-  }, [lessonsFromSyllabus.length])
+    if (!lessonsFromSyllabus.length) return
+    const firstId = lessonsFromSyllabus[0].lesson_id
+    setLessonId((prev) => (prev && lessonsFromSyllabus.some((l) => l.lesson_id === prev) ? prev : firstId))
+    setCurrentLessonId((prev) => (prev && lessonsFromSyllabus.some((l) => l.lesson_id === prev) ? prev : firstId))
+  }, [lessonsFromSyllabus])
 
   const generateExam = async () => {
     setExamState('generating')
