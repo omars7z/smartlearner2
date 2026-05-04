@@ -954,15 +954,9 @@ class OrchestratorService:
     def _qa_track_scope_envelope(self, track: str) -> dict:
         """No LLM call: question looks unrelated to selected-track chunks (saves tokens)."""
         if normalize_track(track) in {"deep_learning", "dl"}:
-            msg = (
-                "I'm only the **Deep Learning** chatbot for this course - I help with deep learning "
-                "book and lecture-note material plus your lessons. Ask something about deep learning topics."
-            )
+            msg = "That's outside your current course scope. Want me to answer it generally, or switch courses first?"
         else:
-            msg = (
-                "I'm only the **Python for Everybody (PY4E)** chatbot for this course - I help with the "
-                "book material and your lessons. Ask something about PY4E or your course topics."
-            )
+            msg = "That's outside your current course scope. Want me to answer it generally, or switch courses first?"
         return {
             "status": "ok",
             "intent": "qa_py4e_scope",

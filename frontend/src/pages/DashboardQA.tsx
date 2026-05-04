@@ -41,6 +41,45 @@ function extractTopicHint(input: string): string {
   return (m?.[1] || 'python basics').trim()
 }
 
+function extractQuickCheckQuestion(markdown: string): string | null {
+  const text = (markdown || '').trim()
+  if (!text) return null
+  // Matches:
+  // > 💡 **Quick check:** ....
+  // or non-quoted "💡 Quick check: ..."
+  const m1 = text.match(/^\s*>\s*💡\s*\*\*Quick check:\*\*\s*(.+)\s*$/im)
+  if (m1?.[1]) return m1[1].trim()
+  const m2 = text.match(/^\s*💡\s*Quick check:\s*(.+)\s*$/im)
+  if (m2?.[1]) return m2[1].trim()
+  return null
+}
+
+function overlapRatio(a: string, b: string): number {
+  const ta = new Set(
+    a
+      .toLowerCase()
+      .split(/[^a-zA-Z0-9_]+/)
+      .filter((x) => x.length > 2),
+  )
+  const tb = new Set(
+    b
+      .toLowerCase()
+      .split(/[^a-zA-Z0-9_]+/)
+      .filter((x) => x.length > 2),
+  )
+  if (!ta.size || !tb.size) return 0
+  let common = 0
+  ta.forEach((t) => {
+    if (tb.has(t)) common += 1
+  })
+  return common / Math.max(ta.size, 1)
+}
+
+function harderQuickCheck(question: string): string {
+  const q = question.trim()
+  return `Harder check: ${q} Then explain one edge case in one sentence.`
+}
+
 export default function DashboardQA() {
   const { accentPrimary, accentSecondary } = useAccentTheme()
   const { addToast } = useToast()
@@ -97,29 +136,110 @@ export default function DashboardQA() {
     // If we are answering a Quick Check, evaluate locally and do NOT call the API
     if (waitingForAnswer && currentQuickCheck) {
       const studentAnswer = raw
+      if (studentAnswer.toLowerCase().trim() === 'next') {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'user', content: studentAnswer },
+          { role: 'assistant', content: 'Got it — moving on. Ask your next question.', routing: [] },
+        ])
+        setQuestion('')
+        setWaitingForAnswer(false)
+        setCurrentQuickCheck(null)
+        setQaMasteredLastCheck(false)
+        return
+      }
       const correct = (currentQuickCheck.answer ?? '').toLowerCase().trim()
       const studentNorm = studentAnswer.toLowerCase().trim()
-      const isCorrect =
-        !!correct &&
-        (studentNorm.includes(correct) || correct.includes(studentNorm))
+      const isGradable = !!correct
+      const isCorrect = isGradable && (studentNorm.includes(correct) || correct.includes(studentNorm))
+      const partialByOverlap =
+        !isCorrect &&
+        overlapRatio(studentNorm, correct || (currentQuickCheck.question ?? '')) >= 0.35
+      const looksWrong = !isCorrect && !partialByOverlap
 
-      setMessages((prev) => [
-        ...prev,
-        { role: 'user', content: studentAnswer },
-        {
-          role: 'assistant',
-          content: isCorrect
-            ? `🎉 Correct! ${currentQuickCheck.answer}. Well done! Ready for the next topic?`
-            : `💡 Not quite! Hint: ${currentQuickCheck.hint ?? 'think about the concept again.'}\nThe answer is: ${
-                currentQuickCheck.answer ?? 'N/A'
-              }`,
-          routing: [],
-        },
-      ])
+      if (isCorrect) {
+        const followUp = harderQuickCheck(currentQuickCheck.question ?? 'Apply the same concept in code.')
+        setMessages((prev) => [
+          ...prev,
+          { role: 'user', content: studentAnswer },
+          {
+            role: 'assistant',
+            content:
+              `✅ Exactly right! Your answer matches the target concept and applies it correctly.\n\n` +
+              `💡 **Quick check:** ${followUp}\n` +
+              `_Reply with your answer or type "next" to continue._`,
+            routing: [],
+          },
+        ])
+        setCurrentQuickCheck({
+          question: followUp,
+          hint: currentQuickCheck.hint ?? 'Focus on why your code works, not only what it prints.',
+          answer: currentQuickCheck.answer ?? '',
+        })
+        setWaitingForAnswer(true)
+        setQaMasteredLastCheck(true)
+        setQuestion('')
+        return
+      }
+
+      if (partialByOverlap) {
+        const reAsk =
+          `Can you answer again with one concrete line of code and one sentence why it works?\n` +
+          `Original check: ${currentQuickCheck.question ?? 'Explain your reasoning.'}`
+        setMessages((prev) => [
+          ...prev,
+          { role: 'user', content: studentAnswer },
+          {
+            role: 'assistant',
+            content:
+              `🟡 Almost! You are close, but you missed a precise detail.\n\n` +
+              `💡 **Quick check:** ${reAsk}\n` +
+              `_Reply with your answer or type "next" to continue._`,
+            routing: [],
+          },
+        ])
+        setCurrentQuickCheck({
+          question: reAsk,
+          hint: currentQuickCheck.hint ?? 'Be explicit about conversion/type handling.',
+          answer: currentQuickCheck.answer ?? '',
+        })
+        setWaitingForAnswer(true)
+        setQaMasteredLastCheck(false)
+        setQuestion('')
+        return
+      }
+
+      if (looksWrong) {
+        const reExplain = currentQuickCheck.hint
+          ? `Try this angle: ${currentQuickCheck.hint}`
+          : 'Try this angle: treat values and their types separately before combining them.'
+        const reAsk =
+          `Re-answer this check using that idea: ${currentQuickCheck.question ?? 'What is the correct approach?'}`
+        setMessages((prev) => [
+          ...prev,
+          { role: 'user', content: studentAnswer },
+          {
+            role: 'assistant',
+            content:
+              `❌ Not quite — ${reExplain}\n\n` +
+              `💡 **Quick check:** ${reAsk}\n` +
+              `_Reply with your answer or type "next" to continue._`,
+            routing: [],
+          },
+        ])
+        setCurrentQuickCheck({
+          question: reAsk,
+          hint: currentQuickCheck.hint ?? 'Use a simple concrete example.',
+          answer: currentQuickCheck.answer ?? '',
+        })
+        setWaitingForAnswer(true)
+        setQaMasteredLastCheck(false)
+        setQuestion('')
+        return
+      }
+
       setQuestion('')
-      setWaitingForAnswer(false)
-      setCurrentQuickCheck(null)
-      setQaMasteredLastCheck(isCorrect)
+      setWaitingForAnswer(true)
       return
     }
 
@@ -135,6 +255,7 @@ export default function DashboardQA() {
         mastery_level: masteryLevel,
         knowledge_map: knowledgeMap,
         track: selectedTrack,
+        active_course: sourceLabel,
         qa_topic: qaTopic,
         qa_followup: messages.length >= 2,
         qa_confused: /i don't get|still confused|مش فاهم|مو فاهم|مش فاهمة|مو فاهمة|مش واضح/i.test(q),
@@ -189,8 +310,17 @@ export default function DashboardQA() {
       mergeAnalyticsFromQA(result.analytics)
 
       // Capture Quick Check for follow-up interaction (if provided)
-      if ((explanationObj?.quick_check?.question ?? '').trim()) {
-        setCurrentQuickCheck(explanationObj?.quick_check ?? null)
+      const quickFromObj = (explanationObj?.quick_check?.question ?? '').trim()
+      const quickFromMarkdown = extractQuickCheckQuestion(finalAnswer)
+      const quickQuestion = quickFromObj || quickFromMarkdown || ''
+      if (quickQuestion) {
+        setCurrentQuickCheck(
+          explanationObj?.quick_check ?? {
+            question: quickQuestion,
+            hint: '',
+            answer: '',
+          },
+        )
         setWaitingForAnswer(true)
       } else {
         setCurrentQuickCheck(null)

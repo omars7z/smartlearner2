@@ -1,5 +1,4 @@
 import difflib
-import random
 
 from app.core.placement_rubric import (
     chapter_scope_for_level,
@@ -47,7 +46,7 @@ DEFAULT_PLACEMENT_USER_PROMPT_TEMPLATE = (
 )
 
 
-def _placement_question_too_similar(candidate: str, prior_texts: list[str]) -> bool:
+def _placement_question_too_similar(candidate: str, prior_texts: list[str], *, max_ratio: float) -> bool:
     """Reject near-duplicate stems when wording differs slightly from an earlier slot."""
     c = " ".join(candidate.lower().split())
     if len(c) < 24:
@@ -56,9 +55,52 @@ def _placement_question_too_similar(candidate: str, prior_texts: list[str]) -> b
         p2 = " ".join(p.lower().split())
         if len(p2) < 24:
             continue
-        if difflib.SequenceMatcher(None, c, p2).ratio() > 0.74:
+        if difflib.SequenceMatcher(None, c, p2).ratio() > max_ratio:
             return True
     return False
+
+
+def _normalize_choice_list(raw: object) -> list[str] | None:
+    """Coerce model output into exactly four non-empty distinct choice strings."""
+    if not isinstance(raw, list) or len(raw) != 4:
+        return None
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            t = item.get("text") or item.get("choice") or item.get("label") or item.get("value")
+            if t is None:
+                return None
+            out.append(str(t).strip())
+        else:
+            out.append(str(item).strip())
+    if any(not x for x in out):
+        return None
+    if len({x.casefold() for x in out}) != 4:
+        return None
+    return out
+
+
+def _resolve_correct_answer(raw: object, choices: list[str]) -> str | None:
+    """Map correct_answer to one of choices (models often return index or near-miss string)."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int) and 0 <= raw < len(choices):
+        return choices[raw]
+    s = str(raw).strip()
+    if s.isdigit():
+        idx = int(s)
+        if 0 <= idx < len(choices):
+            return choices[idx]
+    if s in choices:
+        return s
+    s_cf = s.casefold()
+    for c in choices:
+        if c.casefold() == s_cf:
+            return c
+    close = difflib.get_close_matches(s, choices, n=1, cutoff=0.72)
+    return close[0] if close else None
 
 
 def _extract_question_obj(payload: dict) -> dict | None:
@@ -145,7 +187,10 @@ class PlacementGeneratorAgent(AgentPair):
             )
             prior_stems = [str(q.get("question", "")).strip() for q in questions if q.get("question")]
             rejected_similar_in_slot: list[str] = []
-            for _ in range(5):
+            # Later slots get more attempts and a looser similarity cap (models repeat "What prints?" patterns).
+            similarity_cap = min(0.82, 0.72 + idx * 0.025)
+            max_attempts = 10 if idx >= 2 else 8
+            for _ in range(max_attempts):
                 payload = self._generate_with_retries(
                     model=self.settings.smart_model,
                     system_prompt=sys_prompt,
@@ -155,18 +200,24 @@ class PlacementGeneratorAgent(AgentPair):
                 if not question_obj or not isinstance(question_obj, dict):
                     continue
                 text = str(question_obj.get("question", "")).strip()
-                choices = question_obj.get("choices", [])
-                correct = question_obj.get("correct_answer")
-                if not text or not isinstance(choices, list) or len(choices) != 4 or correct is None:
+                norm_choices = _normalize_choice_list(question_obj.get("choices"))
+                if not text or not norm_choices:
                     continue
-                if _placement_question_too_similar(text, prior_stems + rejected_similar_in_slot):
+                correct_resolved = _resolve_correct_answer(question_obj.get("correct_answer"), norm_choices)
+                if correct_resolved is None:
+                    continue
+                if _placement_question_too_similar(
+                    text,
+                    prior_stems + rejected_similar_in_slot,
+                    max_ratio=similarity_cap,
+                ):
                     rejected_similar_in_slot.append(text)
                     continue
                 questions.append(
                     {
                         "question": text,
-                        "choices": list(choices),
-                        "correct_answer": str(correct),
+                        "choices": norm_choices,
+                        "correct_answer": correct_resolved,
                         "concept": rubric_concept,
                     }
                 )
