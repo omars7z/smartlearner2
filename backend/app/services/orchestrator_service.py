@@ -116,6 +116,37 @@ class OrchestratorService:
         return normalize_track(track or "python")
 
     @staticmethod
+    def _build_fallback_placement_questions(level: str, track: str) -> list[dict]:
+        """
+        Deterministic fallback so placement/start never hard-fails on transient LLM issues.
+        """
+        from app.core.placement_rubric import concepts_for_level
+
+        concepts = list(concepts_for_level(level, track=track))
+        questions: list[dict] = []
+        for concept in concepts[:QUESTIONS_PER_LEVEL]:
+            stem = (
+                f"Which statement best matches this concept: {concept}?"
+                if track in {"deep_learning", "dl"}
+                else f"In Python, which option best describes: {concept}?"
+            )
+            choices = [
+                f"A clear definition and practical use of {concept}",
+                "An unrelated advanced topic from another stage",
+                "A statement that contradicts the concept",
+                "A vague statement with no concrete meaning",
+            ]
+            questions.append(
+                {
+                    "question": stem,
+                    "choices": choices,
+                    "correct_answer": choices[0],
+                    "concept": concept,
+                }
+            )
+        return questions
+
+    @staticmethod
     def _placement_track(payload: dict | None) -> str:
         data = payload if isinstance(payload, dict) else {}
         sess = data.get("placement_session") if isinstance(data.get("placement_session"), dict) else {}
@@ -401,7 +432,21 @@ class OrchestratorService:
             break
 
         if not generated:
-            raise last_exc or AgentValidationError("Could not start placement session after retries.")
+            generated = {"questions": self._build_fallback_placement_questions(first_level, gen_track)}
+            await self.agent_repo.log_run(
+                agent_name=self.placement_generator.name,
+                stage="fallback_generate",
+                input_json={
+                    "level": first_level,
+                    "question_count": QUESTIONS_PER_LEVEL,
+                    "track": track,
+                    "gen_track": gen_track,
+                    "reason": str(last_exc) if last_exc else "unknown",
+                },
+                output_json=generated,
+                is_valid=True,
+                user_id=user_id,
+            )
 
         full_payload = {
             **generated,
