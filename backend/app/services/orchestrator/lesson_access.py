@@ -35,6 +35,35 @@ def build_progression_blocks(lessons: list[Lesson]) -> list[_Block]:
     return out
 
 
+def _unit_key_for_block(block: _Block) -> str:
+    ut = (getattr(block.root, "unit_title", None) or "").strip()
+    return ut if ut else "__default_unit__"
+
+
+def block_checkpoint_lesson_id(block: _Block) -> int | None:
+    """Progression checkpoint for this block (quiz id for singles, last sub-lesson for parents)."""
+    if block.kind == "parent":
+        if not block.children:
+            return None
+        return block.children[-1].id
+    return block.root.id
+
+
+def unit_entry_checkpoint_ids(blocks: list[_Block]) -> frozenset[int]:
+    """Checkpoints for the first topic in each unit — readable without passing the prior unit."""
+    seen_units: set[str] = set()
+    starters: set[int] = set()
+    for b in blocks:
+        key = _unit_key_for_block(b)
+        if key in seen_units:
+            continue
+        seen_units.add(key)
+        cid = block_checkpoint_lesson_id(b)
+        if cid is not None:
+            starters.add(cid)
+    return frozenset(starters)
+
+
 def split_markdown_into_sub_focuses(markdown: str) -> tuple[list[str], list[str]]:
     """
     Returns (part_markdown_snippets, suggested_titles) for 2–4 sub-lessons.
@@ -93,11 +122,18 @@ def split_markdown_into_sub_focuses(markdown: str) -> tuple[list[str], list[str]
 
 
 def assessable_sequence_ids(blocks: list[_Block]) -> list[int]:
-    """Lesson ids that receive assessments, in progression order."""
+    """Lesson ids that gate progression (quiz checkpoints), in course order.
+
+    For a parent topic split into sub-lessons, only the **final** sub-lesson is
+    assessable; earlier parts are readable without a quiz. Single-root blocks
+    still use the root lesson as the checkpoint.
+    """
     ids: list[int] = []
     for b in blocks:
         if b.kind == "parent":
-            ids.extend(L.id for L in b.children)
+            if not b.children:
+                continue
+            ids.append(b.children[-1].id)
         else:
             ids.append(b.root.id)
     return ids
@@ -126,7 +162,9 @@ def block_for_lesson(blocks: list[_Block], lesson_id: int) -> _Block | None:
 
 def is_block_fully_passed(block: _Block, passed_map: dict[int, bool]) -> bool:
     if block.kind == "parent":
-        return all(passed_map.get(c.id, False) for c in block.children)
+        if not block.children:
+            return False
+        return bool(passed_map.get(block.children[-1].id, False))
     return bool(passed_map.get(block.root.id, False))
 
 
@@ -136,21 +174,31 @@ def can_user_access_lesson(
     blocks: list[_Block],
     passed_map: dict[int, bool],
 ) -> bool:
-    """Parents with sub-lessons are overview hubs; assessable leaves chain on prior sibling or prior block."""
+    """Parents with sub-lessons are overview hubs; all parts unlock together; only the last part gates the next topic.
+
+    The first topic in each ``unit_title`` group is always reachable without finishing the previous unit.
+    """
+    unit_starters = unit_entry_checkpoint_ids(blocks)
     block = block_for_lesson(blocks, lesson_id)
     if block is None:
         return False
-    if block.kind == "parent" and block.root.id == lesson_id:
-        pred = predecessor_assessable_id(blocks, block.children[0].id) if block.children else None
-        if pred is None:
-            return True
-        pred_block = block_for_lesson(blocks, pred)
-        if pred_block is None:
-            return False
-        return is_block_fully_passed(pred_block, passed_map)
+    if block.kind == "parent" and block.children:
+        last_child_id = block.children[-1].id
+        if lesson_id == block.root.id or any(c.id == lesson_id for c in block.children):
+            if last_child_id in unit_starters:
+                return True
+            pred = predecessor_assessable_id(blocks, last_child_id)
+            if pred is None:
+                return True
+            pred_block = block_for_lesson(blocks, pred)
+            if pred_block is None:
+                return False
+            return is_block_fully_passed(pred_block, passed_map)
     assessable = assessable_sequence_ids(blocks)
     if lesson_id not in assessable:
         return False
+    if lesson_id in unit_starters:
+        return True
     pred = predecessor_assessable_id(blocks, lesson_id)
     if pred is None:
         return True

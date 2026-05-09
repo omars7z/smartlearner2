@@ -271,6 +271,8 @@ export interface LessonDto {
   course_id?: number
   parent_lesson_id?: number | null
   is_sub_lesson?: boolean
+  /** Only the final sub-lesson carries the topic quiz that unlocks the next lesson. */
+  is_final_sub_lesson?: boolean
   sub_lessons?: LessonDto[]
 }
 
@@ -375,6 +377,8 @@ export interface StructuredLesson {
   sections: LessonSection[]
   sub_lessons?: LessonDto[]
   is_parent_with_sub_lessons?: boolean
+  is_sub_lesson?: boolean
+  is_final_sub_lesson?: boolean
   course_id?: number
 }
 

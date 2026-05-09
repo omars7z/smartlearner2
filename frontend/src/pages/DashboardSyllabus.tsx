@@ -340,7 +340,10 @@ export default function DashboardSyllabus() {
                                       className="flex items-center justify-between gap-2 text-xs text-[color:var(--text-secondary)]"
                                     >
                                       <span className="min-w-0 truncate">
-                                        <span className="text-sky-400 font-medium">Part {si + 1}</span>{' '}
+                                        <span className="text-sky-400 font-medium">Part {si + 1}</span>
+                                        {sub.is_final_sub_lesson ? (
+                                          <span className="text-emerald-300/90 font-medium"> · quiz</span>
+                                        ) : null}{' '}
                                         {sub.title}
                                       </span>
                                       <button

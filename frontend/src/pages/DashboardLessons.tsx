@@ -342,6 +342,9 @@ export default function DashboardLessons() {
                                   }`}
                                 >
                                   <span className="text-sky-400/90 font-medium">Part {si + 1}</span>
+                                  {sub.is_final_sub_lesson ? (
+                                    <span className="ml-1 text-[9px] font-semibold text-emerald-300/90">· quiz</span>
+                                  ) : null}
                                   <span className="block truncate opacity-90" title={sub.title}>
                                     {sub.title.replace(/^\(part\s+\d+\/\d+\)\s*/i, '').trim() || sub.title}
                                   </span>
@@ -432,9 +435,9 @@ export default function DashboardLessons() {
                       className="mt-8 rounded-xl border p-5"
                       style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card)' }}
                     >
-                      <h3 className="text-sm font-semibold text-[color:var(--text-primary)] mb-3">Parts to complete</h3>
+                      <h3 className="text-sm font-semibold text-[color:var(--text-primary)] mb-3">Parts in this topic</h3>
                       <p className="text-xs text-[color:var(--text-muted)] mb-3">
-                        Each part has its own short lesson and quiz. Work through them in order.
+                        Read in any order. Only the <strong>final</strong> part includes the topic quiz that unlocks the next lesson.
                       </p>
                       <div className="flex flex-col gap-2">
                         {lesson.sub_lessons.map((sub, si) => (
@@ -448,6 +451,9 @@ export default function DashboardLessons() {
                             className="text-left rounded-lg px-3 py-2 text-xs border border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10 text-[color:var(--text-primary)]"
                           >
                             <span className="font-semibold text-sky-300">Part {si + 1}</span>
+                            {sub.is_final_sub_lesson ? (
+                              <span className="ml-1 text-[10px] font-semibold text-emerald-300">· topic quiz</span>
+                            ) : null}
                             <span className="block text-[color:var(--text-secondary)] mt-0.5">{sub.title}</span>
                           </button>
                         ))}
@@ -468,8 +474,13 @@ export default function DashboardLessons() {
 
                     {lesson.is_parent_with_sub_lessons ? (
                       <p className="text-sm text-[color:var(--text-secondary)]">
-                        Take the quiz on each part above. This overview does not have its own assessment until all parts
-                        are passed.
+                        This overview has no quiz. Open the <strong>final</strong> part under this topic to take the one
+                        assessment that unlocks the next lesson.
+                      </p>
+                    ) : displayLesson?.is_sub_lesson && lesson?.is_final_sub_lesson === false ? (
+                      <p className="text-sm text-[color:var(--text-secondary)]">
+                        This part is reading only. Open the <strong>final</strong> part of this topic (see sidebar) to
+                        take the quiz and continue the course.
                       </p>
                     ) : !assessmentOpen ? (
                       <button
@@ -598,7 +609,7 @@ export default function DashboardLessons() {
                                   setResultModalMessage(
                                     followup?.explanation?.core_explanation
                                       ? String(followup.explanation.core_explanation)
-                                      : 'This topic was split into smaller lessons. Start with part 1 in the sidebar.'
+                                      : 'This topic was split into parts. Read them in any order; take the quiz on the final part to continue.'
                                   )
                                   setResultModalOpen(true)
                                 } else if (resp.next_action === 'retry_after_regeneration') {

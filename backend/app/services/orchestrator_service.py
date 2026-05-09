@@ -51,7 +51,7 @@ from app.services.orchestrator.lesson_access import (
     split_markdown_into_sub_focuses,
 )
 from app.services.orchestrator.agent_runs import log_agent_run, validate_and_log
-from app.services.orchestrator.qa_helpers import build_failure_context, qa_envelope, qa_track_scope_envelope
+from app.services.orchestrator.qa_helpers import qa_envelope, qa_track_scope_envelope
 from app.services.orchestrator.syllabus import (
     build_local_syllabus_payload as _build_local_syllabus_payload,
     topic_slug as _topic_slug,
@@ -104,8 +104,10 @@ class OrchestratorService:
         children = await self.course_repo.get_child_lessons(parent_lesson_id)
         if not children:
             return
-        pmap = await self.lesson_progress_repo.get_passed_map(user_id, [c.id for c in children])
-        if not all(pmap.get(c.id) for c in children):
+        ordered = sorted(children, key=lambda c: c.order_index)
+        last_id = ordered[-1].id
+        pmap = await self.lesson_progress_repo.get_passed_map(user_id, [last_id])
+        if not pmap.get(last_id):
             return
         pp = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=parent_lesson_id)
         pp.passed = True
@@ -829,7 +831,9 @@ class OrchestratorService:
                     key=lambda x: x.order_index,
                 )
                 if kids:
-                    base["sub_lessons"] = [_lesson_payload(k) for k in kids]
+                    base["sub_lessons"] = [
+                        {**_lesson_payload(k), "is_final_sub_lesson": k.id == kids[-1].id} for k in kids
+                    ]
                 return base
 
             modules.append({
@@ -872,6 +876,17 @@ class OrchestratorService:
 
         await self._ensure_lesson_accessible(user_id, lesson.course_id, lesson.id)
 
+        async def _decorate_sub_lesson_flags(entity, payload: dict) -> dict:
+            if not getattr(entity, "is_sub_lesson", False) or not entity.parent_lesson_id:
+                return payload
+            sibs = await self.course_repo.get_child_lessons(entity.parent_lesson_id)
+            ordered = sorted(sibs, key=lambda x: x.order_index)
+            is_final = bool(ordered) and entity.id == ordered[-1].id
+            lesson_obj = payload.setdefault("lesson", {})
+            lesson_obj["is_sub_lesson"] = True
+            lesson_obj["is_final_sub_lesson"] = is_final
+            return payload
+
         level: str = "beginner"
         course_track = "python"
         chapter_ref: int | None = None
@@ -886,13 +901,14 @@ class OrchestratorService:
 
         children = await self.course_repo.get_child_lessons(lesson.id)
         if children:
+            child_list = sorted(children, key=lambda x: x.order_index)
             overview = (lesson.markdown_content or "").strip()
             if not overview or not _is_dynamic_lesson_markdown(overview):
                 overview = (
                     "## Focused review\n\n"
-                    "This topic is split into smaller steps. Open each part below in order and pass its quiz "
-                    "before moving on.\n\n"
-                    + "\n".join(f"{i + 1}. **{c.title}**" for i, c in enumerate(children))
+                    "This topic is split into smaller steps. Read the parts in any order; only the **final** part "
+                    "includes the topic quiz. Passing that quiz unlocks the next lesson.\n\n"
+                    + "\n".join(f"{i + 1}. **{c.title}**" for i, c in enumerate(child_list))
                 )
             sub_payload = [
                 {
@@ -906,29 +922,36 @@ class OrchestratorService:
                     "course_id": lesson.course_id,
                     "parent_lesson_id": c.parent_lesson_id,
                     "is_sub_lesson": True,
+                    "is_final_sub_lesson": j == len(child_list) - 1,
                 }
-                for c in children
+                for j, c in enumerate(child_list)
             ]
-            return _lesson_response_payload(
-                lesson_id=lesson.id,
-                title=lesson.title,
-                duration_minutes=duration_minutes,
-                markdown=overview,
-                llm_used=False,
-                sub_lessons=sub_payload,
-                is_parent_with_sub_lessons=True,
-                course_id=lesson.course_id,
+            return await _decorate_sub_lesson_flags(
+                lesson,
+                _lesson_response_payload(
+                    lesson_id=lesson.id,
+                    title=lesson.title,
+                    duration_minutes=duration_minutes,
+                    markdown=overview,
+                    llm_used=False,
+                    sub_lessons=sub_payload,
+                    is_parent_with_sub_lessons=True,
+                    course_id=lesson.course_id,
+                ),
             )
 
         existing_markdown = (lesson.markdown_content or "").strip()
         if existing_markdown and _is_dynamic_lesson_markdown(existing_markdown):
-            return _lesson_response_payload(
-                lesson_id=lesson.id,
-                title=lesson.title,
-                duration_minutes=duration_minutes,
-                markdown=existing_markdown,
-                llm_used=False,
-                course_id=lesson.course_id,
+            return await _decorate_sub_lesson_flags(
+                lesson,
+                _lesson_response_payload(
+                    lesson_id=lesson.id,
+                    title=lesson.title,
+                    duration_minutes=duration_minutes,
+                    markdown=existing_markdown,
+                    llm_used=False,
+                    course_id=lesson.course_id,
+                ),
             )
 
         chapter_ref = _extract_chapter_ref(getattr(lesson, "metadata_json", None))
@@ -952,13 +975,16 @@ class OrchestratorService:
                     track=course_track,
                     level=level,
                 )
-            return _lesson_response_payload(
-                lesson_id=lesson.id,
-                title=lesson.title,
-                duration_minutes=duration_minutes,
-                markdown=fallback_markdown,
-                llm_used=False,
-                course_id=lesson.course_id,
+            return await _decorate_sub_lesson_flags(
+                lesson,
+                _lesson_response_payload(
+                    lesson_id=lesson.id,
+                    title=lesson.title,
+                    duration_minutes=duration_minutes,
+                    markdown=fallback_markdown,
+                    llm_used=False,
+                    course_id=lesson.course_id,
+                ),
             )
         await log_agent_run(
             self.agent_repo,
@@ -987,13 +1013,16 @@ class OrchestratorService:
         md = (updated.markdown_content or "").strip()
         if not md:
             md = f"## {updated.title}\n\n_Content could not be loaded. Try refreshing or regenerating this lesson._"
-        return _lesson_response_payload(
-            lesson_id=updated.id,
-            title=updated.title,
-            duration_minutes=duration_minutes,
-            markdown=md,
-            llm_used=True,
-            course_id=lesson.course_id,
+        return await _decorate_sub_lesson_flags(
+            updated,
+            _lesson_response_payload(
+                lesson_id=updated.id,
+                title=updated.title,
+                duration_minutes=duration_minutes,
+                markdown=md,
+                llm_used=True,
+                course_id=lesson.course_id,
+            ),
         )
 
     async def answer_question(
@@ -1086,10 +1115,18 @@ class OrchestratorService:
         chapter_ref = _extract_chapter_ref(lesson.metadata_json)
         child_rows: list[dict] = []
         for i, (snippet, stitle) in enumerate(zip(parts, titles)):
+            continuation_context = (
+                f"This is part {i + 1} of {len(parts)} in a continuous lesson sequence.\n"
+                "Teach only this slice, connect naturally with adjacent parts, and avoid duplicating full explanations "
+                "from earlier/later parts.\n"
+                f"Part title: {stitle}"
+            )
             raw_sl = self.lesson_generator.generate_sub_lesson(
                 parent_topic=lesson.topic,
                 sub_title=f"{lesson.title} — {stitle}",
                 source_excerpt=snippet,
+                continuity_instructions=continuation_context,
+                sequence_part=(i + 1, len(parts)),
                 track=track,
                 level=level,
                 chapter_ref=chapter_ref,
@@ -1123,7 +1160,7 @@ class OrchestratorService:
         overview = (
             "## Focused review\n\n"
             "This topic was split into smaller steps after your last assessment. "
-            "Open each part below **in order** and pass its quiz before moving on.\n\n"
+            "Read the parts in any order; only the **final** part has the topic quiz—pass it to unlock the next lesson.\n\n"
             + "\n".join(f"{i + 1}. **{t}**" for i, t in enumerate(titles))
             + f"\n\n_Total parts: {n}._"
         )
@@ -1149,7 +1186,18 @@ class OrchestratorService:
         await self._ensure_lesson_accessible(user_id, lesson.course_id, lesson.id)
         subs = await self.course_repo.get_child_lessons(lesson.id)
         if subs and not lesson.is_sub_lesson:
-            raise ValueError("Assessments run on each part below. Open the first sub-lesson.")
+            ordered = sorted(subs, key=lambda x: x.order_index)
+            last = ordered[-1]
+            raise ValueError(
+                f"The topic quiz runs on the final part only: «{last.title}». Open it from the sidebar under this topic."
+            )
+        if lesson.is_sub_lesson and lesson.parent_lesson_id:
+            sibs = await self.course_repo.get_child_lessons(lesson.parent_lesson_id)
+            ordered = sorted(sibs, key=lambda x: x.order_index)
+            if ordered and lesson.id != ordered[-1].id:
+                raise ValueError(
+                    "This part has no quiz. Open the **final** part of this topic to take the assessment that unlocks the next lesson."
+                )
         progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
         level = _normalized_course_level(lesson.course.level)
         previous_questions = (
@@ -1186,11 +1234,18 @@ class OrchestratorService:
         if lesson.course is None or lesson.course.user_id != user_id:
             raise ValueError("Lesson not found")
         await self._ensure_lesson_accessible(user_id, lesson.course_id, lesson.id)
+        if lesson.is_sub_lesson and lesson.parent_lesson_id:
+            sibs = await self.course_repo.get_child_lessons(lesson.parent_lesson_id)
+            ordered = sorted(sibs, key=lambda x: x.order_index)
+            if ordered and lesson.id != ordered[-1].id:
+                raise ValueError("Submit the assessment only on the final part of this topic.")
         subs_blocking = await self.course_repo.get_child_lessons(lesson.id)
         if subs_blocking and not lesson.is_sub_lesson:
-            pmap0 = await self.lesson_progress_repo.get_passed_map(user_id, [c.id for c in subs_blocking])
-            if not all(pmap0.get(c.id) for c in subs_blocking):
-                raise ValueError("Complete each sub-lesson for this topic before submitting here.")
+            ordered = sorted(subs_blocking, key=lambda x: x.order_index)
+            last = ordered[-1]
+            pmap0 = await self.lesson_progress_repo.get_passed_map(user_id, [last.id])
+            if not pmap0.get(last.id):
+                raise ValueError("Pass the quiz on the final part of this topic before submitting here.")
         progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
         questions = progress.current_questions_json or []
         if not isinstance(questions, list) or len(questions) != 5:
@@ -1255,31 +1310,12 @@ class OrchestratorService:
             }
 
         level = _normalized_course_level(lesson.course.level)
-        chapter_ref = _extract_chapter_ref(lesson.metadata_json)
-        track = self._track_from_lesson_context(lesson, lesson.course)
-
         if lesson.is_sub_lesson:
-            failure_context = build_failure_context(
-                questions if isinstance(questions, list) else [],
-                answer_map,
-            )
-            raw_sl = self.lesson_generator.generate_sub_lesson(
-                parent_topic=lesson.topic,
-                sub_title=lesson.title,
-                source_excerpt=(lesson.markdown_content or "")[:12000],
-                failure_context=failure_context or None,
-                track=track,
-                level=level,
-                chapter_ref=chapter_ref,
-            )
-            gen_sl = self.lesson_validator.validate(raw_sl, track=track)
-            regenerated_markdown = str(gen_sl.get("markdown") or "")
-            await self.course_repo.update_lesson_content(lesson.id, regenerated_markdown)
             new_questions = await self.assessment_service.generate_assessment(
                 topic=lesson.topic,
                 level=level,
                 lesson_title=lesson.title,
-                lesson_markdown=regenerated_markdown,
+                lesson_markdown=(lesson.markdown_content or ""),
                 attempt_number=max(1, progress.attempts + 1),
                 previous_questions=questions if isinstance(questions, list) else [],
             )
@@ -1290,7 +1326,7 @@ class OrchestratorService:
                 "locked": False,
                 "score": score,
                 "attempts": progress.attempts,
-                "message": f"Assessment failed. This part was expanded for attempt {attempt_number + 1}.",
+                "message": f"Assessment failed. A new quiz set was generated for attempt {attempt_number + 1}.",
                 "next_action": "retry_after_regeneration",
                 "sub_lessons_created": False,
             }
