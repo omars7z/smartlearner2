@@ -104,6 +104,19 @@ def safe_json_loads(raw: str) -> dict | list:
     return json.loads(raw)
 
 
+def parse_llm_json_response(raw: str) -> dict | list:
+    """Parse JSON from LLM output, allowing optional ``` / ```json fences."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        first_nl = text.find("\n")
+        if first_nl != -1:
+            text = text[first_nl + 1 :]
+        fence = text.rfind("```")
+        if fence != -1:
+            text = text[:fence].strip()
+    return json.loads(text)
+
+
 def has_python3_hallucinations(answer: str) -> bool:
     disallowed = ["print x", "xrange(", "raw_input(", "apply("]
     return any(token in answer for token in disallowed)

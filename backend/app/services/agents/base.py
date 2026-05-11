@@ -1,7 +1,7 @@
 import json
 
 from app.core.config import get_settings
-from app.services.guardrails import safe_json_loads
+from app.services.guardrails import parse_llm_json_response
 from app.services.llm_client import LLMClient
 
 
@@ -27,7 +27,7 @@ class AgentPair:
         for _ in range(3):
             raw = self.llm.generate_json(model=model, system_prompt=system_prompt, user_prompt=user_prompt)
             try:
-                return safe_json_loads(raw)
+                return parse_llm_json_response(raw)
             except json.JSONDecodeError as exc:
                 last_error = str(exc)
         raise AgentValidationError(f"JSON parsing failed after 3 retries: {last_error}")

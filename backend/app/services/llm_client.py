@@ -73,6 +73,37 @@ def _prompt_route(system_prompt: str) -> str:
     return "generic"
 
 
+def _try_groq_failed_generation_json(exc: BaseException) -> str | None:
+    """If Groq's error embeds ``failed_generation`` that is valid JSON, use it (avoids extra round-trips)."""
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        return None
+    err = body.get("error")
+    if not isinstance(err, dict):
+        return None
+    fg = err.get("failed_generation")
+    if not isinstance(fg, str):
+        return None
+    text = fg.strip()
+    if not text:
+        return None
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return text
+
+
+def _relaxed_json_user_suffix(route: str) -> str:
+    if route in ("lesson", "syllabus"):
+        return (
+            "\n\n[Output] Return a single raw JSON object only (no ``` fences). "
+            "If you use a \"markdown\" string field, it must be JSON-valid: escape internal double quotes as \\\" "
+            "or use single-quoted Python literals in code examples."
+        )
+    return ""
+
+
 class LLMClient:
     """Groq client. Use ``use_validator_key=True`` for validator-only agents (separate API key)."""
 
@@ -228,19 +259,22 @@ class LLMClient:
                 raise exc
             raise LLMClientError(f"Gemini fallback also failed: {type(exc).__name__}") from exc
 
-    def _generate_with_groq_relaxed_json(self, model: str, system_prompt: str, user_prompt: str) -> str:
+    def _generate_with_groq_relaxed_json(
+        self, model: str, system_prompt: str, user_prompt: str, *, route: str = "qa"
+    ) -> str:
         """
         Retry path when Groq strict JSON validation rejects an otherwise useful answer.
         Leaves schema enforcement to our own JSON parser/retry logic upstream.
         """
         if self.client is None:
             raise LLMClientError("Groq client unavailable for relaxed retry.")
+        user = user_prompt + _relaxed_json_user_suffix(route)
         completion = self.client.chat.completions.create(
             model=model,
             temperature=0.2,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": user},
             ],
         )
         return completion.choices[0].message.content or "{}"
@@ -313,15 +347,26 @@ class LLMClient:
                 type(exc).__name__,
                 exc,
             )
-            if route == "qa" and is_json_validate_failed:
+            if is_json_validate_failed and route in ("qa", "lesson", "syllabus"):
+                salvage = _try_groq_failed_generation_json(exc)
+                if salvage is not None:
+                    logger.warning(
+                        "LLM: Groq json_validate_failed but failed_generation parsed; using it (route=%s).",
+                        route,
+                    )
+                    return salvage
                 logger.warning(
-                    "LLM: Groq strict JSON validation failed for QA; retrying once with relaxed JSON mode."
+                    "LLM: Groq strict JSON validation failed for %s; retrying once with relaxed JSON mode.",
+                    route,
                 )
                 try:
-                    return self._generate_with_groq_relaxed_json(model, system_prompt, user_prompt)
+                    return self._generate_with_groq_relaxed_json(
+                        model, system_prompt, user_prompt, route=route
+                    )
                 except Exception as retry_exc:
                     logger.error(
-                        "LLM: Groq relaxed JSON retry failed for QA (%s: %s).",
+                        "LLM: Groq relaxed JSON retry failed for %s (%s: %s).",
+                        route,
                         type(retry_exc).__name__,
                         retry_exc,
                     )
