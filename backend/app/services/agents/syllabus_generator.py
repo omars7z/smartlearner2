@@ -87,6 +87,7 @@ class SyllabusGeneratorAgent(AgentPair):
                 + "\"topic\" — copied EXACTLY from the allowed topic list (no changes, no paraphrasing); "
                 + "\"lesson_title\" — specific and engaging, NOT just the topic name "
                 + "(e.g. 'Storing and Naming Values' not 'Variables'); "
+                # + "Do NOT prefix lesson_title with the word \"Practical\" (no titles like \"Practical X\"). "
                 + "\"description\" — 2-3 sentences: concept taught, what learner practices, measurable outcome; "
                 + "\"learning_objectives\" — list of 3-5 strings starting with action verbs "
                 + "(Identify, Write, Use, Explain, Debug, Apply, Distinguish); "

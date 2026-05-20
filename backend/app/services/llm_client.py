@@ -2,26 +2,40 @@ import json
 import logging
 import random
 import re
+import time
+from importlib import import_module
 
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 from app.core.groq_rate_limits import update_from_headers
 
-try:
-    from groq import Groq
-except Exception:  # pragma: no cover
-    Groq = None
+_LOGGED_GROQ_UNAVAILABLE_PRIMARY = False
+_LOGGED_GROQ_UNAVAILABLE_VALIDATOR = False
+_LOGGED_GEMINI_UNAVAILABLE = False
 
-try:
-    import google.generativeai as genai
-except Exception:  # pragma: no cover
-    genai = None
+# Tried in order on 429/503/etc. Gemini 1.5 IDs return 404 (retired); use 2.x/3.x per Google AI docs.
+_GEMINI_REST_MODEL_FALLBACKS = (
+    "gemini-2.0-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-flash-latest",
+)
+# Retry once with backoff, then try the next model.
+_GEMINI_TRANSIENT_HTTP = frozenset({429, 502, 503, 504})
 
-try:
-    import requests
-except Exception:  # pragma: no cover
-    requests = None
+def _load_optional_module(name: str):
+    try:
+        return import_module(name)
+    except Exception:  # pragma: no cover
+        return None
+
+
+groq_mod = _load_optional_module("groq")
+genai = _load_optional_module("google.generativeai")
+requests = _load_optional_module("requests")
 
 
 class LLMClientError(RuntimeError):
@@ -34,55 +48,257 @@ def _is_placement_mcq_generator(system_prompt: str) -> bool:
     return "placement" in s and "validator" not in s
 
 
+def _is_lesson_or_syllabus_generation(system_prompt: str) -> bool:
+    s = system_prompt.lower().strip()
+    # Keep this strict so QA prompts that mention "lesson topic" are NOT misclassified.
+    return (
+        s.startswith("lesson generator for ")
+        or s.startswith("you write remedial sub-lessons for ")
+        or s.startswith("syllabus generator for track ")
+    )
+
+
+def _prompt_route(system_prompt: str) -> str:
+    s = system_prompt.lower()
+    if _is_placement_mcq_generator(system_prompt):
+        return "placement"
+    if s.strip().startswith("syllabus generator for track "):
+        return "syllabus"
+    if s.strip().startswith("lesson generator for ") or s.strip().startswith("you write remedial sub-lessons for "):
+        return "lesson"
+    if "validator" in s:
+        return "validator"
+    if "q&a" in s or "qa" in s or "tutor" in s:
+        return "qa"
+    return "generic"
+
+
+def _try_groq_failed_generation_json(exc: BaseException) -> str | None:
+    """If Groq's error embeds ``failed_generation`` that is valid JSON, use it (avoids extra round-trips)."""
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        return None
+    err = body.get("error")
+    if not isinstance(err, dict):
+        return None
+    fg = err.get("failed_generation")
+    if not isinstance(fg, str):
+        return None
+    text = fg.strip()
+    if not text:
+        return None
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return text
+
+
+def _relaxed_json_user_suffix(route: str) -> str:
+    if route in ("lesson", "syllabus"):
+        return (
+            "\n\n[Output] Return a single raw JSON object only (no ``` fences). "
+            "If you use a \"markdown\" string field, it must be JSON-valid: escape internal double quotes as \\\" "
+            "or use single-quoted Python literals in code examples."
+        )
+    return ""
+
+
 class LLMClient:
     """Groq client. Use ``use_validator_key=True`` for validator-only agents (separate API key)."""
 
     def __init__(self, *, use_validator_key: bool = False) -> None:
+        global _LOGGED_GROQ_UNAVAILABLE_PRIMARY, _LOGGED_GROQ_UNAVAILABLE_VALIDATOR, _LOGGED_GEMINI_UNAVAILABLE
         self.settings = get_settings()
         self.use_validator_key = use_validator_key
+        self.gemini_api_key = (getattr(self.settings, "gemini_api_key", None) or "").strip()
         self.client = None
-        if Groq:
+        if groq_mod:
             key: str | None
             if use_validator_key:
                 key = self.settings.groq_api_key_validators or self.settings.groq_api_key
             else:
                 key = self.settings.groq_api_key
             if key:
-                self.client = Groq(api_key=key)
+                self.client = groq_mod.Groq(api_key=key)
 
         self.gemini_client = None
         if genai:
-            gemini_key = getattr(self.settings, "gemini_api_key", None)
-            if gemini_key:
+            if self.gemini_api_key:
                 try:
-                    genai.configure(api_key=gemini_key)
+                    genai.configure(api_key=self.gemini_api_key)
                     self.gemini_client = genai.GenerativeModel(
                         model_name="gemini-2.0-flash",
                         generation_config={"response_mime_type": "application/json"},
                     )
-                except Exception:
+                except Exception as exc:
+                    logger.warning("LLM: Gemini init failed: %s", exc)
                     self.gemini_client = None
+        if self.client is None:
+            if use_validator_key and not _LOGGED_GROQ_UNAVAILABLE_VALIDATOR:
+                logger.warning("LLM: Groq validator client is not configured (key missing or SDK unavailable).")
+                _LOGGED_GROQ_UNAVAILABLE_VALIDATOR = True
+            elif not use_validator_key and not _LOGGED_GROQ_UNAVAILABLE_PRIMARY:
+                logger.warning("LLM: Groq primary client is not configured (key missing or SDK unavailable).")
+                _LOGGED_GROQ_UNAVAILABLE_PRIMARY = True
+        if not self._gemini_fallback_available() and not _LOGGED_GEMINI_UNAVAILABLE:
+            logger.warning("LLM: Gemini fallback is not configured/available.")
+            _LOGGED_GEMINI_UNAVAILABLE = True
+
+    def _gemini_rest_available(self) -> bool:
+        return bool(self.gemini_api_key) and requests is not None
+
+    def _gemini_fallback_available(self) -> bool:
+        return self.gemini_client is not None or self._gemini_rest_available()
+
+    @staticmethod
+    def _text_from_gemini_rest_json(data: dict) -> str:
+        cands = data.get("candidates") or []
+        if not isinstance(cands, list) or not cands:
+            raise LLMClientError("Gemini REST returned no candidates.")
+        parts = (((cands[0] or {}).get("content") or {}).get("parts")) or []
+        if not isinstance(parts, list):
+            raise LLMClientError("Gemini REST returned malformed content.")
+        text = ""
+        for p in parts:
+            if isinstance(p, dict) and isinstance(p.get("text"), str):
+                text += p["text"]
+        text = text.strip()
+        if not text:
+            raise LLMClientError("Gemini REST returned empty text.")
+        return text
+
+    def _generate_with_gemini_rest(self, system_prompt: str, user_prompt: str) -> str:
+        if not self.gemini_api_key:
+            raise LLMClientError("Gemini API key missing — set GEMINI_API_KEY in .env.")
+        if requests is None:
+            raise LLMClientError("requests package unavailable for Gemini REST fallback.")
+        # Header auth: never put API key in URL (avoids leaking keys in HTTP error strings).
+        headers = {"Content-Type": "application/json", "x-goog-api-key": self.gemini_api_key}
+        body = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": f"{system_prompt}\n\n{user_prompt}"}],
+                }
+            ],
+            "generationConfig": {"responseMimeType": "application/json"},
+        }
+        base = "https://generativelanguage.googleapis.com/v1beta/models/"
+        last_status: int | None = None
+        for model_id in _GEMINI_REST_MODEL_FALLBACKS:
+            url = f"{base}{model_id}:generateContent"
+            for attempt in range(2):
+                if attempt:
+                    time.sleep(2.0 + random.random())
+                try:
+                    resp = requests.post(url, json=body, headers=headers, timeout=(15, 90))
+                    last_status = resp.status_code
+                    if resp.status_code == 404:
+                        logger.warning(
+                            "LLM: Gemini REST model %s not available (HTTP 404); trying next.",
+                            model_id,
+                        )
+                        break
+                    if resp.status_code in _GEMINI_TRANSIENT_HTTP:
+                        logger.warning(
+                            "LLM: Gemini REST model %s returned HTTP %s (transient), attempt %s/%s.",
+                            model_id,
+                            resp.status_code,
+                            attempt + 1,
+                            2,
+                        )
+                        if attempt == 0:
+                            continue
+                        break
+                    if resp.status_code != 200:
+                        resp.raise_for_status()
+                    data = resp.json()
+                    text = self._text_from_gemini_rest_json(data)
+                    if model_id != _GEMINI_REST_MODEL_FALLBACKS[0]:
+                        logger.warning("LLM: Gemini REST succeeded using fallback model %s.", model_id)
+                    return text
+                except requests.RequestException as exc:
+                    r = getattr(exc, "response", None)
+                    status = getattr(r, "status_code", None) if r is not None else None
+                    last_status = status or last_status
+                    if status in _GEMINI_TRANSIENT_HTTP and attempt == 0:
+                        continue
+                    if status is None:
+                        raise LLMClientError("Gemini REST request failed (network or timeout).") from exc
+                    if status in _GEMINI_TRANSIENT_HTTP:
+                        break
+                    raise LLMClientError(f"Gemini REST failed with HTTP {status}.") from exc
+                except ValueError as exc:
+                    raise LLMClientError(f"Gemini REST invalid JSON response: {exc}") from exc
+        if last_status in _GEMINI_TRANSIENT_HTTP:
+            raise LLMClientError(
+                "Gemini REST: all fallback models exhausted after retries "
+                "(HTTP 429/502/503/504). Retry later or check Google AI Studio / billing / status."
+            )
+        raise LLMClientError("Gemini REST failed for all fallback models.")
 
     def _generate_with_gemini(self, system_prompt: str, user_prompt: str) -> str:
         """Fallback to Gemini when Groq is unavailable or rate-limited."""
-        if self.gemini_client is None:
-            raise LLMClientError("Gemini client not configured — set GEMINI_API_KEY in .env.")
+        if self.gemini_client is None and not self._gemini_rest_available():
+            raise LLMClientError(
+                "Gemini client not configured — set GEMINI_API_KEY (and install `requests` for REST fallback)."
+            )
         try:
-            combined = f"{system_prompt}\n\n{user_prompt}"
-            response = self.gemini_client.generate_content(combined)
-            text = response.text or "{}"
-            logger.warning("LLM: Gemini fallback succeeded (Groq rate-limited or failed).")
+            logger.warning("LLM: attempting Gemini fallback (route=%s).", _prompt_route(system_prompt))
+            if self.gemini_client is not None:
+                combined = f"{system_prompt}\n\n{user_prompt}"
+                response = self.gemini_client.generate_content(combined)
+                text = response.text or "{}"
+            else:
+                text = self._generate_with_gemini_rest(system_prompt, user_prompt)
+            logger.warning("LLM: Gemini fallback succeeded (route=%s).", _prompt_route(system_prompt))
             return text
         except Exception as exc:
-            raise LLMClientError(f"Gemini fallback also failed: {exc}") from exc
+            if isinstance(exc, LLMClientError):
+                raise exc
+            raise LLMClientError(f"Gemini fallback also failed: {type(exc).__name__}") from exc
+
+    def _generate_with_groq_relaxed_json(
+        self, model: str, system_prompt: str, user_prompt: str, *, route: str = "qa"
+    ) -> str:
+        """
+        Retry path when Groq strict JSON validation rejects an otherwise useful answer.
+        Leaves schema enforcement to our own JSON parser/retry logic upstream.
+        """
+        if self.client is None:
+            raise LLMClientError("Groq client unavailable for relaxed retry.")
+        user = user_prompt + _relaxed_json_user_suffix(route)
+        completion = self.client.chat.completions.create(
+            model=model,
+            temperature=0.2,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user},
+            ],
+        )
+        return completion.choices[0].message.content or "{}"
 
     def generate_json(self, model: str, system_prompt: str, user_prompt: str) -> str:
         if self.client is None:
-            if self.gemini_client is not None:
+            route = _prompt_route(system_prompt)
+            logger.warning("LLM: Groq unavailable; trying Gemini fallback (route=%s).", route)
+            if self._gemini_fallback_available():
                 try:
                     return self._generate_with_gemini(system_prompt, user_prompt)
-                except LLMClientError:
-                    pass
+                except LLMClientError as gemini_exc:
+                    logger.error(
+                        "LLM: Gemini fallback failed while Groq unavailable (route=%s): %s",
+                        route,
+                        gemini_exc,
+                    )
+            else:
+                logger.error("LLM: Gemini fallback unavailable (route=%s).", route)
+            if _is_lesson_or_syllabus_generation(system_prompt):
+                raise LLMClientError(
+                    "Groq unavailable and Gemini fallback failed/unavailable for lesson/syllabus generation. "
+                    "Set GROQ_API_KEY and GEMINI_API_KEY."
+                )
             if _is_placement_mcq_generator(system_prompt):
                 logger.warning(
                     "Groq client unavailable for placement and Gemini fallback failed/unavailable; "
@@ -121,102 +337,71 @@ class LLMClient:
             raise
         except Exception as exc:
             is_rate_limit = "429" in str(exc) or "rate_limit" in str(exc).lower() or "quota" in str(exc).lower()
+            is_json_validate_failed = "json_validate_failed" in str(exc).lower() or "failed to generate json" in str(exc).lower()
+            route = _prompt_route(system_prompt)
+            logger.warning(
+                "LLM: Groq request failed (route=%s, model=%s, rate_limit=%s, error=%s: %s).",
+                route,
+                model,
+                is_rate_limit,
+                type(exc).__name__,
+                exc,
+            )
+            if is_json_validate_failed and route in ("qa", "lesson", "syllabus"):
+                salvage = _try_groq_failed_generation_json(exc)
+                if salvage is not None:
+                    logger.warning(
+                        "LLM: Groq json_validate_failed but failed_generation parsed; using it (route=%s).",
+                        route,
+                    )
+                    return salvage
+                logger.warning(
+                    "LLM: Groq strict JSON validation failed for %s; retrying once with relaxed JSON mode.",
+                    route,
+                )
+                try:
+                    return self._generate_with_groq_relaxed_json(
+                        model, system_prompt, user_prompt, route=route
+                    )
+                except Exception as retry_exc:
+                    logger.error(
+                        "LLM: Groq relaxed JSON retry failed for %s (%s: %s).",
+                        route,
+                        type(retry_exc).__name__,
+                        retry_exc,
+                    )
             if _is_placement_mcq_generator(system_prompt):
-                if is_rate_limit and self.gemini_client is not None:
+                if is_rate_limit and self._gemini_fallback_available():
                     try:
                         return self._generate_with_gemini(system_prompt, user_prompt)
-                    except LLMClientError:
-                        pass
+                    except LLMClientError as gemini_exc:
+                        logger.error(
+                            "LLM: Gemini fallback failed for placement after Groq rate-limit: %s",
+                            gemini_exc,
+                        )
                 logger.warning(
                     "Groq placement generation failed (%s: %s); using local mock fallback.",
                     type(exc).__name__,
                     exc,
                 )
                 return self._mock_json(system_prompt, user_prompt)
-            if is_rate_limit and self.gemini_client is not None:
+            if self._gemini_fallback_available():
                 try:
                     return self._generate_with_gemini(system_prompt, user_prompt)
-                except LLMClientError:
-                    pass
-            return self._mock_json(system_prompt, user_prompt, self.use_validator_key)
-
-    def generate_json_via_ollama(self, model: str, system_prompt: str, user_prompt: str) -> str:
-        """Q&A via Ollama: OpenAI-compatible ``/v1/chat/completions`` (local), or native ``/api/chat`` (ollama.com)."""
-        if requests is None:
-            raise LLMClientError("Install requests for Ollama QA: pip install requests")
-        base = (self.settings.ollama_base_url or "http://127.0.0.1:11434/v1").rstrip("/")
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        key = (self.settings.ollama_api_key or "").strip()
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        # Local OpenAI-compatible: .../v1/chat/completions. Cloud + official API: .../api/chat (see docs.ollama.com/api).
-        if base.endswith("/v1"):
-            url = f"{base}/chat/completions"
-            body: dict = {
-                "model": model,
-                "messages": messages,
-                "temperature": 0.4,
-                "stream": False,
-            }
-        else:
-            api_base = base if "/api" in base else f"{base}/api"
-            api_base = api_base.rstrip("/")
-            url = f"{api_base}/chat"
-            body = {
-                "model": model,
-                "messages": messages,
-                "stream": False,
-                "options": {"temperature": 0.4},
-            }
-
-        try:
-            r = requests.post(url, json=body, headers=headers, timeout=(15, 420))
-            r.raise_for_status()
-            data = r.json()
-            content: str | None = None
-            if isinstance(data.get("choices"), list) and data["choices"]:
-                msg = (data["choices"][0] or {}).get("message") or {}
-                content = msg.get("content") if isinstance(msg, dict) else None
-            elif isinstance(data.get("message"), dict):
-                content = data["message"].get("content")
-            if isinstance(content, str) and content.strip():
-                logger.info("LLM: Ollama QA response received (model=%s).", model)
-                return content.strip()
-        except LLMClientError:
-            raise
-        except requests.exceptions.ConnectionError as exc:
-            raise LLMClientError(
-                "Ollama unreachable — local OpenAI compat: OLLAMA_BASE_URL=http://127.0.0.1:11434/v1. "
-                "Cloud API: OLLAMA_BASE_URL=https://ollama.com/api + OLLAMA_API_KEY (docs.ollama.com/api/authentication)."
-            ) from exc
-        except requests.exceptions.RequestException as exc:
-            raise LLMClientError(f"Ollama HTTP error: {exc}") from exc
-        except (KeyError, IndexError, TypeError) as exc:
-            raise LLMClientError(f"Ollama response parse error: {exc}") from exc
-        raise LLMClientError("Ollama returned empty content for QA.")
-
-    def generate_json_for_qa(self, model: str, system_prompt: str, user_prompt: str) -> str:
-        """
-        Dedicated Q&A chain:
-        1) Ollama (if QA_USE_OLLAMA=true)
-        2) Groq (QA model)
-        3) Gemini fallback on Groq 429/quota
-        """
-        if self.settings.qa_use_ollama:
-            try:
-                return self.generate_json_via_ollama(
-                    model=self.settings.ollama_model,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
+                except LLMClientError as gemini_exc:
+                    logger.error(
+                        "LLM: Gemini fallback failed after Groq error (route=%s): %s",
+                        route,
+                        gemini_exc,
+                    )
+            else:
+                logger.error("LLM: Gemini fallback unavailable after Groq error (route=%s).", route)
+            if _is_lesson_or_syllabus_generation(system_prompt):
+                raise LLMClientError(
+                    "Groq failed and Gemini fallback failed/unavailable for lesson/syllabus generation. "
+                    "Check API keys and provider quota."
                 )
-            except LLMClientError as ollama_exc:
-                logger.warning("Q&A: Ollama failed; falling back to Groq/Gemini chain. reason=%s", ollama_exc)
-        return self.generate_json(model=model, system_prompt=system_prompt, user_prompt=user_prompt)
+            return self._mock_json(system_prompt, user_prompt, self.use_validator_key)
 
     def _mock_json(self, system_prompt: str, user_prompt: str, use_validator_key: bool = False) -> str:
         sp = system_prompt.lower()

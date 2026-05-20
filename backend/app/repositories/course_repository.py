@@ -194,7 +194,9 @@ class CourseRepository:
                 row = _lesson_row(les)
                 kids = sorted([x for x in sorted_lessons if x.parent_lesson_id == les.id], key=lambda x: x.order_index)
                 if kids:
-                    row["sub_lessons"] = [_lesson_row(k) for k in kids]
+                    row["sub_lessons"] = [
+                        {**_lesson_row(k), "is_final_sub_lesson": k.id == kids[-1].id} for k in kids
+                    ]
                 lesson_payloads.append(row)
 
             modules.append({

@@ -75,7 +75,9 @@ export default function DashboardSyllabus() {
     setLoading(true)
     setLastError(null)
     try {
-      const courseTitle = `Python ${String(placement.level).replace(/_/g, ' ')} Course`
+      const trackRaw = String((placement as { track?: string })?.track ?? 'python').toLowerCase().replace(/_/g, '-')
+      const trackLabel = trackRaw.includes('deep') ? 'Deep Learning' : 'Python'
+      const courseTitle = `${trackLabel} ${String(placement.level).replace(/_/g, ' ')} Course`
       const data = await syllabusApi.generate(placementId, courseTitle)
       const envelope = data as { result?: { syllabus?: ModuleDto[]; modules?: ModuleDto[]; track?: string }; syllabus?: ModuleDto[]; modules?: ModuleDto[] }
       const resolved = envelope.result ?? envelope
@@ -338,7 +340,10 @@ export default function DashboardSyllabus() {
                                       className="flex items-center justify-between gap-2 text-xs text-[color:var(--text-secondary)]"
                                     >
                                       <span className="min-w-0 truncate">
-                                        <span className="text-sky-400 font-medium">Part {si + 1}</span>{' '}
+                                        <span className="text-sky-400 font-medium">Part {si + 1}</span>
+                                        {sub.is_final_sub_lesson ? (
+                                          <span className="text-emerald-300/90 font-medium"> · quiz</span>
+                                        ) : null}{' '}
                                         {sub.title}
                                       </span>
                                       <button

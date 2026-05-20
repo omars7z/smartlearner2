@@ -31,7 +31,7 @@ class LessonValidatorAgent:
             markdown = markdown.rstrip() + suffix
         # theres a markdown thats saved in the db for the lesson agent to retrueve and validate
         payload["markdown"] = markdown
-        ok, reason = validate_content_scope(markdown)
+        ok, reason = validate_content_scope(markdown, track=track_key)
         if not ok:
             raise AgentValidationError(reason)
         return payload

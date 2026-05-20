@@ -65,9 +65,11 @@ class QAGeneratorAgent(AgentPair):
         if track_key in {"deep_learning", "dl"}:
             source_label = "Deep Learning (Goodfellow, Bengio, Courville; MIT Press)"
             default_course = "Deep Learning Foundations"
+            source_ref = "https://www.deeplearningbook.org/"
         else:
             source_label = "Python for Everybody (Charles Severance, University of Michigan; Coursera)"
             default_course = "Python for Everybody"
+            source_ref = "https://www.py4e.com/"
         active_course = (
             str(student_context.get("active_course") or "").strip()
             if isinstance(student_context, dict)
@@ -78,13 +80,17 @@ class QAGeneratorAgent(AgentPair):
             isinstance(student_context, dict)
             and (
                 student_context.get("qa_confused") is True
-                or re.search(r"\b(i don't get|still confused|مش فاهم|مو فاهم|مش فاهمة|مو فاهمة)\b", safe_question.lower())
+                or re.search(
+                    r"\b(i don't get|still confused|مش فاهم|مو فاهم|مش فاهمة|مو فاهمة)\b",
+                    safe_question.lower(),
+                )
             )
         )
         followup = bool(isinstance(student_context, dict) and student_context.get("qa_followup"))
         mastered = bool(isinstance(student_context, dict) and student_context.get("qa_mastered_last_check"))
         length_hint = (
-            "Length rule: simple factual questions max 3-4 lines; explanatory questions medium length; deep dives can be longer."
+            "Length rule: simple factual questions max 3-4 lines; explanatory questions medium length; "
+            "deep dives can be longer."
         )
         followup_hint = (
             "Follow-up rule: if this is a follow-up, build on prior answer and do not repeat basic definitions."
@@ -101,12 +107,34 @@ class QAGeneratorAgent(AgentPair):
             if mastered
             else "Mastery handling: keep complexity appropriate to learner level."
         )
+
+        mastery_level = ""
+        low_mastery_topics: list[str] = []
+        if isinstance(student_context, dict):
+            mastery_level = str(student_context.get("mastery_level") or "").strip().lower()
+            km = student_context.get("knowledge_map")
+            if isinstance(km, dict):
+                for k, v in km.items():
+                    try:
+                        fv = float(v)
+                    except (TypeError, ValueError):
+                        continue
+                    if fv < 0.45:
+                        low_mastery_topics.append(str(k))
+        low_mastery_topics = low_mastery_topics[:4]
+        if mastery_level in {"beginner", "low"} or low_mastery_topics:
+            adapt_mode = "supportive_step_by_step"
+        elif mastery_level in {"advanced", "very_advanced", "high"}:
+            adapt_mode = "concise_technical"
+        else:
+            adapt_mode = "balanced"
+
         qa_system = (
             "You are an adaptive AI tutor assistant. "
             f"ACTIVE_COURSE = {active_course}. "
             f"Course reference source = {source_label}. "
-            "Respond ONLY with valid JSON: "
-            '{"answer": "<markdown or plain text>"}. '
+            "Respond ONLY with valid JSON. "
+            '{"answer": "<markdown or plain text>", "suggestions": ["<optional follow-up 1>", "<optional follow-up 2>"]}. '
             "Use the provided RAG context as primary evidence; explain only topics those chunks support. "
             "Stay strictly within ACTIVE_COURSE and the provided context. "
             "Do not introduce concepts beyond what the context covers. "
@@ -115,7 +143,14 @@ class QAGeneratorAgent(AgentPair):
             "Do not use one flat paragraph format for all answers. "
             "If question is outside ACTIVE_COURSE, answer exactly: "
             "\"That's outside your current course scope. Want me to answer it generally, or switch courses first?\" "
-            f'The answer field MUST contain the exact substring: {source_label.split(" (")[0]}.'
+            f'The answer field MUST contain the exact substring: {source_label.split(" (")[0]}. '
+            "Adapt teaching style using ADAPT_MODE from the user message: "
+            "supportive_step_by_step = slower pace, clearer steps, simpler wording, one quick check; "
+            "balanced = practical concise explanation with one example; "
+            "concise_technical = short direct technical answer. "
+            "When helpful, include a tiny runnable code snippet. "
+            "Include 1-2 short follow-up suggestions in suggestions[] that stay in track scope. "
+            "If the user asks a broad definition, answer clearly and briefly, then relate it to the track context."
         )
         context = self.rag.retrieve_python_basics_context(safe_question, k=4)
         payload = self._generate_with_retries(
@@ -130,17 +165,20 @@ class QAGeneratorAgent(AgentPair):
                 f"{mastery_hint}\n\n"
                 f"ACTIVE_COURSE: {active_course}\n"
                 f"Track: {track_key}\n"
+                f"ADAPT_MODE: {adapt_mode}\n"
+                f"Low mastery topics (if any): {', '.join(low_mastery_topics) if low_mastery_topics else 'none'}\n"
                 f"Optional app context (may be generic): {lesson_markdown}\n"
                 f"Student context: {student_context if isinstance(student_context, dict) else {}}\n"
                 f"Question: {safe_question}\n"
                 f"RAG context: {context}"
             ),
-            use_ollama_qa=True,
         )
+        if not isinstance(payload.get("suggestions"), list):
+            payload["suggestions"] = []
         payload["rag"] = {
             "chunks_used": len(context),
             "selected_chunks": [
-                {"text": chunk, "source": self.settings.source_resource} for chunk in context
+                {"text": chunk, "source": source_ref} for chunk in context
             ],
         }
         return payload

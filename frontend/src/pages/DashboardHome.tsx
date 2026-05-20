@@ -17,6 +17,7 @@ import { useAccentTheme } from '../hooks/useAccentTheme'
 import { useDashboard } from '../context/DashboardContext'
 import { useToast } from '../context/ToastContext'
 import {
+  describeApiError,
   placementApi,
   type PlacementQuestionDto,
   type PlacementFullResult,
@@ -62,8 +63,9 @@ export default function DashboardHome() {
       }
     } catch (err) {
       console.error(err)
-      setPlacementError('Could not start placement test.')
-      addToast('error', 'Could not start placement test.')
+      const msg = describeApiError(err, 'Could not start placement test.')
+      setPlacementError(msg)
+      addToast('error', msg)
     } finally {
       setPlacementLoading(false)
     }
@@ -96,8 +98,9 @@ export default function DashboardHome() {
       }
     } catch (err) {
       console.error(err)
-      setPlacementError('Failed to submit placement test.')
-      addToast('error', 'Failed to submit placement test.')
+      const msg = describeApiError(err, 'Failed to submit placement test.')
+      setPlacementError(msg)
+      addToast('error', msg)
     } finally {
       setPlacementLoading(false)
     }
@@ -110,9 +113,11 @@ export default function DashboardHome() {
     }
     setSyllabusLoading(true)
     try {
+      const trackRaw = String(fullPlacementResult.track ?? 'python').toLowerCase().replace(/_/g, '-')
+      const trackLabel = trackRaw.includes('deep') ? 'Deep Learning' : 'Python'
       const data = await syllabusApi.generate(
         placementId,
-        `Python ${String(fullPlacementResult.level).replace(/_/g, ' ')} Course`
+        `${trackLabel} ${String(fullPlacementResult.level).replace(/_/g, ' ')} Course`
       )
       const modules = data.result?.syllabus ?? []
       if (modules.length) {

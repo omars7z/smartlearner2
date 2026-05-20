@@ -60,7 +60,7 @@ class LessonGeneratorAgent(AgentPair):
                 "## Summary (bullets). "
                 "For python track, cite 'Python for Everybody' at least once. "
                 "For deep_learning track, cite 'Deep Learning' at least once and ground examples in lecture-note style practice. "
-                # "For deep_learning track, NEVER mention 'Python for Everybody', 'PY4E', or Py4E chapter references. "
+                "For deep_learning track, NEVER mention 'Python for Everybody', 'PY4E', or Py4E chapter references. "
                 "Ground explanations in the provided course-text context when relevant."
             ),
             user_prompt=(
@@ -69,6 +69,7 @@ class LessonGeneratorAgent(AgentPair):
                 + "Generate the full markdown lesson. Do not leave headings empty."
             ),
         )
+        # make markdown everytimr you generate a lesson to compress tokens 
         if is_dl and isinstance(payload, dict):
             md = str(payload.get("markdown") or "")
             if md:
@@ -86,6 +87,9 @@ class LessonGeneratorAgent(AgentPair):
         parent_topic: str,
         sub_title: str,
         source_excerpt: str,
+        failure_context: str | None = None,
+        continuity_instructions: str | None = None,
+        sequence_part: tuple[int, int] | None = None,
         track: str = "python",
         level: str = "beginner",
         chapter_ref: int | None = None,
@@ -93,23 +97,57 @@ class LessonGeneratorAgent(AgentPair):
         """
         Remediation slice after a failed assessment: slower pace, more examples, no terse summary.
         """
-        context = self.rag.retrieve_python_basics_context(parent_topic, k=6)
+        rag_query = (parent_topic or "python").strip()
+        if sequence_part:
+            part_i, part_n = sequence_part
+            rag_query = f"{rag_query} {sanitize_prompt(sub_title)} part {part_i} of {part_n}"
+        context = self.rag.retrieve_python_basics_context(rag_query, k=6)
         sanitized_topic = sanitize_prompt(parent_topic)
         display_title = sanitize_prompt(sub_title)
         track_key = (track or "python").strip().lower().replace("-", "_")
         is_dl = track_key in {"deep_learning", "dl"}
+        intro_line = (
+            "The learner is working through a split lesson; this installment must cover only the slice implied by the title and excerpt."
+            if sequence_part
+            else "The student failed to understand this topic. Generate a more detailed, beginner-friendly explanation."
+        )
         scope_bits: list[str] = [
             f"Track: {track_key}",
             f"Sub-lesson title: {display_title}",
             f"Original topic (slug): {sanitized_topic}",
             f"Target learner level: {level}",
-            "The student failed to understand this topic. Generate a more detailed, beginner-friendly explanation.",
+            intro_line,
             "Do NOT summarize the topic in bullet-only form; expand with intuition, definitions, and reasoning.",
             "Include at least two concrete examples and one short step-by-step walkthrough.",
             "Add practical context (when/why this matters) and common misconceptions.",
             "Prioritize clarity over breadth; stay within this sub-lesson slice.",
-            f"Ground in this excerpt from their prior lesson attempt:\n{sanitize_prompt(source_excerpt[:12000])}",
+            (
+                f"Ground in this excerpt (this part's slice of the original lesson):\n{sanitize_prompt(source_excerpt[:12000])}"
+                if sequence_part
+                else f"Ground in this excerpt from their prior lesson attempt:\n{sanitize_prompt(source_excerpt[:12000])}"
+            ),
         ]
+        if sequence_part:
+            pi, pn = sequence_part
+            scope_bits.insert(
+                0,
+                "MULTI-PART SEQUENCE: You are writing ONE installment of a longer topic. "
+                f"This is part {pi} of {pn}. "
+                "Each part must use different examples, different analogies, and different section headings than the other parts. "
+                "Do not restate the full topic overview from scratch as if part 1; build forward. "
+                "If this is not part 1, open with one short bridging paragraph that references that the learner already covered earlier steps.",
+            )
+        if continuity_instructions:
+            scope_bits.append(
+                "Continuity and scope constraints for this installment:\n"
+                + sanitize_prompt(continuity_instructions[:6000])
+            )
+        if failure_context:
+            scope_bits.append(
+                "Personalize remediation using this assessment failure context. "
+                "Explicitly target the misconceptions shown here, then provide one corrected mini-example per misconception:\n"
+                + sanitize_prompt(failure_context[:6000])
+            )
         if chapter_ref is not None:
             scope_bits.append(
                 f"Deep Learning chapter reference (for grounding): chapter {chapter_ref}"
@@ -117,6 +155,12 @@ class LessonGeneratorAgent(AgentPair):
                 else f"Py4E chapter reference (for grounding): chapter {chapter_ref}"
             )
         user_head = "\n".join(scope_bits)
+        seq_extra = ""
+        if sequence_part:
+            seq_extra = (
+                " When this is one of several parts, never copy-paste identical paragraphs across parts: "
+                "each part must advance the learner with new material."
+            )
         payload = self._generate_with_retries(
             model=self.settings.smart_model,
             system_prompt=(
@@ -129,6 +173,7 @@ class LessonGeneratorAgent(AgentPair):
                 "Use GitHub-flavored Markdown: ## and ### headings, **bold** terms, numbered steps, fenced ```python``` blocks. "
                 "Avoid a short recap section; instead end with a brief 'Check your understanding' (2 questions in prose, no quiz UI). "
                 "Aim for roughly 500–900 words of teaching content."
+                + seq_extra
             ),
             user_prompt=(
                 f"{user_head}\n\n"

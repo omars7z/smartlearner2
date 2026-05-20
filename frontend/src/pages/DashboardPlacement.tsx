@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { useDashboard } from '../context/DashboardContext'
 import { useToast } from '../context/ToastContext'
 import { useAccentTheme } from '../hooks/useAccentTheme'
-import { placementApi, type PlacementFullResult } from '../services/api'
+import { describeApiError, placementApi, type PlacementFullResult } from '../services/api'
 
 type PlacementState = 'idle' | 'loading' | 'testing' | 'results'
 
@@ -53,14 +53,6 @@ const TRACKS = [
   { id: 'nlp', label: 'NLP' },
 ] as const
 
-function apiErrorDetail(err: unknown, fallback: string): string {
-  const ax = err as { response?: { data?: { detail?: unknown } }; message?: string }
-  const d = ax?.response?.data?.detail
-  if (typeof d === 'string' && d.trim()) return d
-  if (Array.isArray(d) && d.length) return d.map((x) => JSON.stringify(x)).join('; ')
-  return ax?.message || fallback
-}
-
 export default function DashboardPlacement() {
   const { accentPrimary, accentSecondary } = useAccentTheme()
   const navigate = useNavigate()
@@ -102,7 +94,7 @@ export default function DashboardPlacement() {
       setSelectedAnswer(null)
       setState('testing')
     } catch (err) {
-      addToast('error', apiErrorDetail(err, 'Failed to start test'))
+      addToast('error', describeApiError(err, 'Failed to start test'))
       setState('idle')
     } finally {
       setBusy(false)
@@ -165,7 +157,7 @@ export default function DashboardPlacement() {
         setState('testing')
       }
     } catch (err) {
-      addToast('error', apiErrorDetail(err, 'Failed to submit answer'))
+      addToast('error', describeApiError(err, 'Failed to submit answer'))
       setState('testing')
     } finally {
       setBusy(false)
