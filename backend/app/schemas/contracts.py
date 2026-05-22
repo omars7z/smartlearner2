@@ -69,6 +69,22 @@ class ExamExecutionRequest(BaseModel):
     code: str
 
 
+class ExamGenerateRequest(BaseModel):
+    lesson_id: str
+    level: Literal["beginner", "intermediate", "advanced"] = "beginner"
+    question_count: int = Field(default=5, ge=3, le=10)
+
+
+class ExamGradeAnswerDto(BaseModel):
+    question_id: str
+    answer_index: int = Field(ge=0, le=3)
+
+
+class ExamGradeRequest(BaseModel):
+    lesson_id: str
+    answers: list[ExamGradeAnswerDto] = Field(default_factory=list, min_length=1, max_length=10)
+
+
 class ResourceCreateRequest(BaseModel):
     title: str = Field(min_length=2, max_length=255)
     url: str = Field(min_length=5, max_length=2048)

@@ -7,6 +7,13 @@ import { useToast } from '../context/ToastContext'
 import { useDashboard } from '../context/DashboardContext'
 import { qaApi } from '../services/api'
 import { getStudentIdForApi } from '../utils/studentIdentity'
+import {
+  clearQaMessages,
+  getActiveUserId,
+  getUserCurrentTrack,
+  loadQaMessages,
+  saveQaMessages,
+} from '../utils/dashboardStorage'
 
 interface ExplanationPayload {
   hook?: string
@@ -89,44 +96,25 @@ export default function DashboardQA() {
   const [loading, setLoading] = useState(false)
   const [qaTopic, setQaTopic] = useState<string>('python basics')
   const [qaMasteredLastCheck, setQaMasteredLastCheck] = useState(false)
-  const STORAGE_KEY = 'smartlearner-qa-messages'
   const [waitingForAnswer, setWaitingForAnswer] = useState(false)
   const [currentQuickCheck, setCurrentQuickCheck] = useState<ExplanationPayload['quick_check'] | null>(null)
   const selectedTrack = (() => {
-    try {
-      const t = (localStorage.getItem('current_track') || 'python').toLowerCase().replace(/-/g, '_')
-      return t === 'deep_learning' ? 'deep_learning' : 'python'
-    } catch {
-      return 'python'
-    }
+    const t = getUserCurrentTrack()
+    return t === 'deep_learning' ? 'deep_learning' : 'python'
   })()
   const sourceLabel = selectedTrack === 'deep_learning' ? 'Deep Learning' : 'Python for Everybody'
 
   // Load persisted chat on first mount
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as ChatMessage[]
-      if (Array.isArray(parsed)) {
-        setMessages(parsed)
-      }
-    } catch {
-      // ignore parse errors
+    const parsed = loadQaMessages<ChatMessage>(getActiveUserId())
+    if (parsed.length > 0) {
+      setMessages(parsed)
     }
   }, [])
 
   // Persist chat whenever it changes
   useEffect(() => {
-    try {
-      if (messages.length === 0) {
-        localStorage.removeItem(STORAGE_KEY)
-        return
-      }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages))
-    } catch {
-      // ignore storage errors
-    }
+    saveQaMessages(getActiveUserId(), messages)
   }, [messages])
 
   const handleAsk = async (override?: string) => {
@@ -352,11 +340,7 @@ export default function DashboardQA() {
 
   const handleClearChat = () => {
     setMessages([])
-    try {
-      localStorage.removeItem(STORAGE_KEY)
-    } catch {
-      // ignore
-    }
+    clearQaMessages(getActiveUserId())
   }
 
   return (

@@ -2,6 +2,8 @@
 
 from app.services.agents.base import AgentPair, AgentValidationError
 from app.services.agents.analytics_agent import AnalyticsAgent
+from app.services.agents.exam_generator import ExamGeneratorAgent
+from app.services.agents.exam_validator import ExamValidatorAgent
 from app.services.agents.lesson_generator import LessonGeneratorAgent
 from app.services.agents.lesson_validator import LessonValidatorAgent
 from app.services.agents.placement_generator import (
@@ -21,6 +23,8 @@ __all__ = [
     "AgentPair",
     "AgentValidationError",
     "AnalyticsAgent",
+    "ExamGeneratorAgent",
+    "ExamValidatorAgent",
     "LessonGeneratorAgent",
     "LessonValidatorAgent",
     "PlacementGeneratorAgent",

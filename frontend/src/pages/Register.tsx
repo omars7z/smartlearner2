@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { GraduationCap, Mail, Lock, User, Eye, EyeOff } from 'lucide-react'
 import { useLanguage } from '../context/LanguageContext'
 import { authApi, type UserRole } from '../services/api'
+import { onAuthSessionStarted } from '../utils/dashboardStorage'
 
 export default function Register() {
   const { t } = useLanguage()
@@ -62,6 +63,7 @@ export default function Register() {
           role: res.role ?? role,
         })
       )
+      onAuthSessionStarted()
       setShowToast(true)
       setTimeout(() => {
         setShowToast(false)

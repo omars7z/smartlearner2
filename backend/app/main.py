@@ -7,6 +7,8 @@ import json
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -60,6 +62,36 @@ async def _ensure_lessons_table_columns(conn) -> None:
         await conn.execute(text("ALTER TABLE lessons ADD COLUMN is_sub_lesson BOOLEAN DEFAULT 0 NOT NULL"))
 
 
+async def _ensure_users_table_columns_postgres(conn) -> None:
+    """Lightweight ALTERs for cloud DBs created before newer ORM columns (matches SQLite path)."""
+    stmts = [
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255)",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'student' NOT NULL",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE NOT NULL",
+    ]
+    for stmt in stmts:
+        try:
+            await conn.execute(text(stmt))
+        except Exception:
+            pass
+
+
+async def _ensure_lessons_table_columns_postgres(conn) -> None:
+    """Add lesson columns required by current ORM; idempotent for Supabase/Postgres."""
+    stmts = [
+        "ALTER TABLE lessons ADD COLUMN IF NOT EXISTS unit_title VARCHAR(255)",
+        "ALTER TABLE lessons ADD COLUMN IF NOT EXISTS metadata_json JSONB DEFAULT '{}'::jsonb",
+        "ALTER TABLE lessons ADD COLUMN IF NOT EXISTS prerequisites_json JSONB DEFAULT '[]'::jsonb",
+        "ALTER TABLE lessons ADD COLUMN IF NOT EXISTS parent_lesson_id INTEGER",
+        "ALTER TABLE lessons ADD COLUMN IF NOT EXISTS is_sub_lesson BOOLEAN DEFAULT FALSE NOT NULL",
+    ]
+    for stmt in stmts:
+        try:
+            await conn.execute(text(stmt))
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
@@ -67,6 +99,9 @@ async def lifespan(_: FastAPI):
         if settings.database_url.startswith("sqlite"):
             await _ensure_users_table_columns(conn)
             await _ensure_lessons_table_columns(conn)
+        elif "postgres" in settings.database_url.lower():
+            await _ensure_users_table_columns_postgres(conn)
+            await _ensure_lessons_table_columns_postgres(conn)
         await conn.run_sync(Base.metadata.create_all)
     yield
 
@@ -93,6 +128,19 @@ def _cors_origin_list() -> list[str]:
 
 
 app = FastAPI(title="SmartLearner 2.0 Backend", lifespan=lifespan)
+
+
+class GroqRateLimitExposeMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        for name, value in response_header_pairs():
+            response.headers[name] = value
+        return response
+
+
+# Register inner middleware first, then CORS: CORS ends up outermost so ACAO is applied
+# consistently (reduces confusing "CORS blocked" when the real issue was a 500).
+app.add_middleware(GroqRateLimitExposeMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origin_list(),
@@ -103,14 +151,6 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=_EXPOSE_RATE_HEADERS,
 )
-
-
-@app.middleware("http")
-async def attach_groq_rate_limit_headers(request, call_next):
-    response = await call_next(request)
-    for name, value in response_header_pairs():
-        response.headers[name] = value
-    return response
 
 
 app.include_router(router)

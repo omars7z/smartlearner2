@@ -32,8 +32,12 @@ interface ExamResults {
 const LETTERS = ['A', 'B', 'C', 'D']
 
 function normalizeQuestions(raw: unknown): ExamQuestionDto[] {
-  const data = raw as { exam?: { questions?: ExamQuestionDto[] }; questions?: ExamQuestionDto[] }
-  const list = data?.exam?.questions ?? data?.questions ?? []
+  const data = raw as {
+    exam?: { questions?: ExamQuestionDto[] }
+    questions?: ExamQuestionDto[]
+    result?: { questions?: ExamQuestionDto[] }
+  }
+  const list = data?.result?.questions ?? data?.exam?.questions ?? data?.questions ?? []
   return Array.isArray(list) ? list : []
 }
 
@@ -73,7 +77,7 @@ function calculateLocally(
 
 export default function DashboardExams() {
   const { accentPrimary, accentSecondary } = useAccentTheme()
-  const { placementDone, syllabusModules, setFirstExamTaken } = useDashboard()
+  const { placementDone, syllabusModules, setFirstExamTaken, mergeAnalyticsFromQA } = useDashboard()
   const { addToast } = useToast()
   const navigate = useNavigate()
 
@@ -103,7 +107,7 @@ export default function DashboardExams() {
     setExamState('generating')
     const lid = lessonsFromSyllabus.length ? lessonId : currentLessonId
     try {
-      const res = await examsApi.generate(lid)
+      const res = await examsApi.generate(lid, { level, question_count: numQ })
       const qs = normalizeQuestions(res)
       if (qs.length === 0) {
         addToast('error', 'No questions generated, try again')
@@ -130,12 +134,32 @@ export default function DashboardExams() {
         const idx = letter ? LETTERS.indexOf(letter) : 0
         return { question_id: qid, answer_index: idx >= 0 ? idx : 0 }
       })
-      await examsApi.grade(lid, answerList)
-      const localResults = calculateLocally(questions, answers)
-      setResults(localResults)
+      const gradeRes = await examsApi.grade(lid, answerList)
+      const backendResults = gradeRes?.result
+      let finalPct = 0
+      if (backendResults?.results?.length) {
+        const total = backendResults.total ?? backendResults.results.length
+        const score = backendResults.score ?? backendResults.results.filter((r) => r.correct).length
+        finalPct = backendResults.overall_score ?? (total ? Math.round((score / total) * 100) : 0)
+        setResults({
+          score,
+          total,
+          percentage: finalPct,
+          passed: finalPct >= 60,
+          results: backendResults.results,
+          feedback: finalPct >= 90 ? '🎉 Excellent!' : finalPct >= 70 ? '👍 Good job!' : finalPct >= 50 ? '📚 Keep practicing!' : '💪 Review the material',
+        })
+      } else {
+        const localResults = calculateLocally(questions, answers)
+        finalPct = localResults.percentage
+        setResults(localResults)
+      }
+      if (backendResults?.analytics) {
+        mergeAnalyticsFromQA(backendResults.analytics)
+      }
       setFirstExamTaken(true)
       setExamState('results')
-      addToast('success', `Score: ${localResults.percentage}%`)
+      addToast('success', `Score: ${finalPct}%`)
     } catch (err) {
       const localResults = calculateLocally(questions, answers)
       setResults(localResults)
@@ -391,7 +415,7 @@ export default function DashboardExams() {
               <div className="result-actions flex flex-wrap gap-3">
                 <button
                   type="button"
-                  onClick={() => { setExamState('setup'); setQuestions([]); setResults(null) }}
+                  onClick={() => { setQuestions([]); setResults(null); setAnswers({}); void generateExam() }}
                   className="rounded-xl py-2.5 px-4 text-sm font-semibold border"
                   style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                 >

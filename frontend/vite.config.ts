@@ -8,5 +8,12 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     strictPort: false,
+    // Same-origin API in dev → no browser CORS (requests go to /api/v1 on this host, Vite forwards to backend).
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+    },
   },
 })

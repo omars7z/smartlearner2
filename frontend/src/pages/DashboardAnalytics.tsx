@@ -3,6 +3,7 @@ import { BarChart2, TrendingUp, AlertTriangle, Brain, Target, Sparkles } from 'l
 import { useDashboard } from '../context/DashboardContext'
 import { useAccentTheme } from '../hooks/useAccentTheme'
 import { analyticsApi, type AnalyticsSummaryResponse } from '../services/api'
+import { agentOutputToPayload } from '../utils/analyticsMerge'
 
 export default function DashboardAnalytics() {
   const { accentPrimary, accentSecondary } = useAccentTheme()
@@ -14,31 +15,48 @@ export default function DashboardAnalytics() {
     lastAnalytics,
     currentTopic,
     masteryLevel,
+    mergeAnalyticsFromQA,
   } = useDashboard()
   const [agentSummary, setAgentSummary] = useState<AnalyticsSummaryResponse | null>(null)
   const [agentLoading, setAgentLoading] = useState(false)
   const [agentError, setAgentError] = useState<string | null>(null)
 
-  const topicEntries = Object.entries(knowledgeMap).sort((a, b) => b[1] - a[1])
+  const agentOutput = agentSummary?.result.agent_output
+  const liveMap =
+    agentOutput?.mastery_state && Object.keys(agentOutput.mastery_state).length > 0
+      ? agentOutput.mastery_state
+      : knowledgeMap
+  const topicEntries = Object.entries(liveMap).sort((a, b) => b[1] - a[1])
   const hasMap = topicEntries.length > 0
   const hasAgent = agentSummary != null
   const hasAnalytics = hasAgent || lastAnalytics != null || overallMastery > 0 || hasMap
   const insights = agentSummary?.result.insights
   const metrics = agentSummary?.result.metrics
+  const progressPct =
+    agentOutput?.progress_report?.overall_progress_percent ??
+    (metrics?.placement_percentage != null ? metrics.placement_percentage : overallMastery)
 
   const riskLabel =
-    lastAnalytics?.riskLevel?.replace(/^\w/, (c) => c.toUpperCase()) ??
-    (firstExamTaken ? 'Low' : '—')
+    agentOutput?.risk_flag
+      ? 'High'
+      : lastAnalytics?.riskLevel?.replace(/^\w/, (c) => c.toUpperCase()) ??
+        (firstExamTaken ? 'Low' : '—')
 
   useEffect(() => {
     setAgentLoading(true)
     setAgentError(null)
     analyticsApi
       .summary()
-      .then((data) => setAgentSummary(data))
+      .then((data) => {
+        setAgentSummary(data)
+        const output = data.result.agent_output
+        if (output?.mastery_state && Object.keys(output.mastery_state).length > 0) {
+          mergeAnalyticsFromQA(agentOutputToPayload(output))
+        }
+      })
       .catch((err) => setAgentError(err?.response?.data?.detail || err?.message || 'Failed to load analytics'))
       .finally(() => setAgentLoading(false))
-  }, [])
+  }, [mergeAnalyticsFromQA])
 
   return (
     <div
@@ -50,7 +68,7 @@ export default function DashboardAnalytics() {
           Performance & Analytics
         </h1>
         <p className="text-sm text-[color:var(--text-muted)] mb-6">
-          Adaptive analytics from placement, courses, lessons, and the Analytics Agent.
+          Live mastery from your personal syllabus and the Analytics Agent (DKT).
           {currentTopic && (
             <>
               {' '}
@@ -81,8 +99,7 @@ export default function DashboardAnalytics() {
           >
             <BarChart2 className="h-14 w-14 mx-auto text-slate-500 mb-4" />
             <p className="text-[color:var(--text-secondary)] mb-2">
-              Ask a question in <strong>Q&A</strong> with a <code className="text-xs">current_topic</code> to start
-              tracking, or complete placement to seed topics.
+              Complete placement and generate your syllabus to start live mastery tracking.
             </p>
             <p className="text-xs text-[color:var(--text-muted)]">Level: {masteryLevel}</p>
           </div>
@@ -145,19 +162,22 @@ export default function DashboardAnalytics() {
                   <div
                     className="h-full rounded-full transition-all duration-500"
                     style={{
-                      width: `${metrics ? Math.round((metrics.placement_percentage ?? overallMastery)) : overallMastery}%`,
+                      width: `${Math.round(progressPct)}%`,
                       background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})`,
                     }}
                   />
                 </div>
                 <span className="text-xl font-bold text-[color:var(--text-primary)] w-16 text-right">
-                  {metrics ? `${metrics.placement_percentage ?? overallMastery}%` : `${overallMastery.toFixed(0)}%`}
+                  {Math.round(progressPct)}%
                 </span>
               </div>
-              {lastAnalytics && (
+              {(lastAnalytics || agentOutput) && (
                 <p className="text-xs text-[color:var(--text-muted)] mt-3">
-                  Last update: {new Date(lastAnalytics.updatedAt).toLocaleString()} · Next:{' '}
-                  <code>{lastAnalytics.nextAction}</code>
+                  {agentOutput?.timestamp && (
+                    <>Agent sync: {new Date(agentOutput.timestamp).toLocaleString()} · </>
+                  )}
+                  {lastAnalytics && <>Last update: {new Date(lastAnalytics.updatedAt).toLocaleString()} · </>}
+                  Next: <code>{agentOutput?.next_action ?? lastAnalytics?.nextAction ?? 'continue'}</code>
                 </p>
               )}
             </div>
@@ -171,6 +191,9 @@ export default function DashboardAnalytics() {
                   <Target className="h-5 w-5" />
                   Knowledge map (topics)
                 </h2>
+                <p className="text-xs text-[color:var(--text-muted)] mb-4">
+                  Live from Analytics Agent · syllabus topics only
+                </p>
                 <ul className="space-y-3">
                   {topicEntries.map(([topic, score]) => (
                     <li key={topic}>
@@ -180,7 +203,7 @@ export default function DashboardAnalytics() {
                       </div>
                       <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
                         <div
-                          className="h-full rounded-full"
+                          className="h-full rounded-full transition-all duration-500"
                           style={{
                             width: `${Math.min(100, Math.max(0, score * 100))}%`,
                             background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})`,
@@ -192,6 +215,35 @@ export default function DashboardAnalytics() {
                 </ul>
               </div>
             )}
+
+            {agentOutput?.student_profile && (
+              <div
+                className="rounded-2xl p-4 text-sm"
+                style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)' }}
+              >
+                <p className="text-xs uppercase text-[color:var(--text-muted)] mb-2">Learning profile</p>
+                <p className="text-[color:var(--text-secondary)]">
+                  Speed: {agentOutput.student_profile.learning_speed?.toFixed(2) ?? '—'} · Consistency:{' '}
+                  {agentOutput.student_profile.consistency_score != null
+                    ? `${Math.round(agentOutput.student_profile.consistency_score * 100)}%`
+                    : '—'}
+                </p>
+              </div>
+            )}
+
+            {(insights?.risk_factors?.length ?? agentOutput?.risk_factors?.length) ? (
+              <div
+                className="rounded-2xl p-4 text-sm"
+                style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)' }}
+              >
+                <p className="text-xs uppercase text-[color:var(--text-muted)] mb-2">Risk factors</p>
+                <ul className="list-disc list-inside text-[color:var(--text-secondary)] space-y-1">
+                  {(insights?.risk_factors ?? agentOutput?.risk_factors ?? []).map((f) => (
+                    <li key={f}>{f}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div
@@ -221,13 +273,13 @@ export default function DashboardAnalytics() {
                 <div>
                   <p className="text-xs text-[color:var(--text-muted)]">Risk</p>
                   <p className="text-lg font-semibold text-[color:var(--text-primary)]">
-                    {insights
-                      ? insights.risk_level
-                      : lastAnalytics != null
-                      ? `${(lastAnalytics.riskScore * 100).toFixed(0)}% (${riskLabel})`
-                      : firstExamTaken
-                        ? '—'
-                        : '—'}
+                    {agentOutput?.risk_flag
+                      ? 'high'
+                      : insights
+                        ? insights.risk_level
+                        : lastAnalytics != null
+                          ? `${(lastAnalytics.riskScore * 100).toFixed(0)}% (${riskLabel})`
+                          : '—'}
                   </p>
                 </div>
               </div>

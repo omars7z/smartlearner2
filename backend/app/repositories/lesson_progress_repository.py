@@ -38,3 +38,20 @@ class LessonProgressRepository:
         res = await self.db.execute(q)
         return {int(r[0]): bool(r[1]) for r in res.all()}
 
+    async def get_details_map(self, user_id: int, lesson_ids: list[int]) -> dict[int, dict]:
+        if not lesson_ids:
+            return {}
+        q = select(LessonProgress).where(
+            LessonProgress.user_id == user_id,
+            LessonProgress.lesson_id.in_(lesson_ids),
+        )
+        res = await self.db.execute(q)
+        out: dict[int, dict] = {}
+        for row in res.scalars():
+            out[int(row.lesson_id)] = {
+                "passed": bool(row.passed),
+                "attempts": int(row.attempts or 0),
+                "last_score": row.last_score,
+            }
+        return out
+

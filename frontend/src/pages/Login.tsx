@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { GraduationCap, Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import { useLanguage } from '../context/LanguageContext'
 import { authApi } from '../services/api'
+import { onAuthSessionStarted } from '../utils/dashboardStorage'
 
 export default function Login() {
   const { t } = useLanguage()
@@ -28,6 +29,7 @@ export default function Login() {
           role: res.role ?? 'student',
         })
       )
+      onAuthSessionStarted()
       navigate('/dashboard')
     } catch (err: any) {
       const msg = err?.response?.data?.detail ?? 'Invalid email or password.'

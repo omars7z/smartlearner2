@@ -7,9 +7,14 @@ import {
   useState,
 } from 'react'
 import type { AnalyticsPayload, ModuleDto, LessonDto, PlacementFullResult } from '../services/api'
-import { normalizeSyllabusModules } from '../utils/syllabusOrder'
-
-const STORAGE_KEY = 'smartlearner-dashboard-state'
+import {
+  clearDashboardState,
+  clearLegacyUserScopedStorage,
+  getActiveUserId,
+  loadDashboardState,
+  saveDashboardState,
+  type PersistedDashboardState,
+} from '../utils/dashboardStorage'
 
 export interface DashboardPlacementResult {
   level: string
@@ -63,36 +68,9 @@ const defaultState: DashboardState = {
   lastAnalytics: null,
 }
 
-function loadState(): DashboardState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return defaultState
-    const parsed = JSON.parse(raw) as Partial<DashboardState>
-    return {
-      ...defaultState,
-      ...parsed,
-      placementResult: parsed.placementResult ?? defaultState.placementResult,
-      fullPlacementResult: parsed.fullPlacementResult ?? defaultState.fullPlacementResult,
-      syllabusModules: normalizeSyllabusModules(
-        Array.isArray(parsed.syllabusModules) ? (parsed.syllabusModules as ModuleDto[]) : [],
-      ),
-      knowledgeMap:
-        parsed.knowledgeMap && typeof parsed.knowledgeMap === 'object'
-          ? (parsed.knowledgeMap as Record<string, number>)
-          : {},
-      currentTopic: typeof parsed.currentTopic === 'string' ? parsed.currentTopic : null,
-      masteryLevel: typeof parsed.masteryLevel === 'string' ? parsed.masteryLevel : 'beginner',
-      lastAnalytics: parsed.lastAnalytics ?? null,
-    }
-  } catch {
-    return defaultState
-  }
-}
-
-function saveState(state: DashboardState) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-  } catch (_) {}
+function loadStateForCurrentUser(): DashboardState {
+  const uid = getActiveUserId()
+  return loadDashboardState(uid, defaultState as PersistedDashboardState) as DashboardState
 }
 
 interface DashboardContextValue extends DashboardState {
@@ -111,13 +89,17 @@ interface DashboardContextValue extends DashboardState {
 const DashboardContext = createContext<DashboardContextValue | null>(null)
 
 export function DashboardProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<DashboardState>(loadState)
+  const [activeUserId] = useState<string | null>(() => getActiveUserId())
+  const [state, setState] = useState<DashboardState>(() => {
+    clearLegacyUserScopedStorage()
+    return loadStateForCurrentUser()
+  })
 
   useEffect(() => {
-    saveState(state)
+    saveDashboardState(getActiveUserId(), state as PersistedDashboardState)
   }, [state])
 
-    const setPlacementDone = useCallback(
+  const setPlacementDone = useCallback(
     (result: DashboardPlacementResult | null, full?: PlacementFullResult | null, placementId?: number | null) => {
       setState((s) => {
         const next = {
@@ -141,14 +123,14 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         return next
       })
     },
-    []
+    [],
   )
 
   const setSyllabusModules = useCallback((syllabusModules: ModuleDto[]) => {
     setState((s) => ({
       ...s,
       syllabusGenerated: syllabusModules.length > 0,
-      syllabusModules: normalizeSyllabusModules(syllabusModules),
+      syllabusModules,
     }))
   }, [])
 
@@ -179,18 +161,20 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const mergeAnalyticsFromQA = useCallback((analytics: AnalyticsPayload | undefined) => {
     if (!analytics) return
     setState((s) => {
-      const km = analytics.knowledge_map ?? s.knowledgeMap
+      const hasBackendMap =
+        analytics.knowledge_map != null && Object.keys(analytics.knowledge_map).length > 0
+      const km = hasBackendMap ? { ...analytics.knowledge_map! } : { ...s.knowledgeMap }
       const overallPct = Math.round(Math.max(0, Math.min(1, analytics.overall_mastery ?? 0)) * 100)
       return {
         ...s,
-        knowledgeMap: { ...km },
+        knowledgeMap: km,
         overallMastery: overallPct,
         lastAnalytics: {
           studentId: analytics.student_id,
           overallMastery: analytics.overall_mastery ?? 0,
           riskScore: analytics.risk_score ?? 0,
           riskLevel: analytics.risk_level ?? 'low',
-          knowledgeMap: { ...km },
+          knowledgeMap: km,
           nextAction: analytics.next_action ?? 'continue',
           updatedAt: Date.now(),
         },
@@ -199,6 +183,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const resetDashboard = useCallback(() => {
+    clearDashboardState(getActiveUserId())
     setState(defaultState)
   }, [])
 
@@ -228,8 +213,16 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       setKnowledgeMap,
       mergeAnalyticsFromQA,
       resetDashboard,
-    ]
+    ],
   )
+
+  // If user id at mount differs from token (edge case), reload once.
+  useEffect(() => {
+    const uid = getActiveUserId()
+    if (uid && uid !== activeUserId) {
+      setState(loadStateForCurrentUser())
+    }
+  }, [activeUserId])
 
   return (
     <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>

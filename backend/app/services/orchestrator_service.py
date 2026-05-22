@@ -1,4 +1,5 @@
 import json
+import logging
 from itertools import groupby
 
 from sqlalchemy import select
@@ -18,6 +19,8 @@ from app.core.placement_rubric import (
 from app.services.agents import (
     AgentValidationError,
     AnalyticsAgent,
+    ExamGeneratorAgent,
+    ExamValidatorAgent,
     LessonGeneratorAgent,
     LessonValidatorAgent,
     PlacementGeneratorAgent,
@@ -30,6 +33,35 @@ from app.services.agents import (
 from app.services.assessment_service import AssessmentService
 from app.services.guardrails import run_exam_code_in_sandbox, sanitize_prompt
 from app.services.llm_client import LLMClient, LLMClientError
+
+logger = logging.getLogger(__name__)
+
+
+def _json_for_agent_log(obj: object) -> dict:
+    """Ensure JSON-serializable dict for agent_runs.output_json (avoids DB/encode 500s)."""
+    if not isinstance(obj, dict):
+        return {"_note": "non-dict payload", "repr": repr(obj)[:2000]}
+    try:
+        return json.loads(json.dumps(obj, default=str))
+    except (TypeError, ValueError) as exc:
+        logger.warning("Syllabus log payload not JSON-safe: %s", exc)
+        return {"_error": "payload omitted", "detail": str(exc)[:500]}
+
+
+def _questions_json_as_dict(raw: object) -> dict:
+    """Some DB drivers return JSON as str; normalize for placement_session / track."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
 from app.services.orchestrator.common import (
     assign_question_ids as _assign_question_ids,
     duration_minutes_for_level as _duration_minutes_for_level,
@@ -66,6 +98,37 @@ def _track_from_course_title(title: str | None) -> str:
     return "python"
 
 
+def _exam_questions_for_frontend(questions: list[dict]) -> list[dict]:
+    letters = ["A", "B", "C", "D"]
+    out: list[dict] = []
+    for i, q in enumerate(questions):
+        choices = list(q.get("choices") or [])
+        correct = str(q.get("correct_answer") or "").strip()
+        correct_idx = 0
+        for j, c in enumerate(choices):
+            if str(c).strip() == correct:
+                correct_idx = j
+                break
+        qid = str(q.get("id") or f"eq{i}")
+        diff = str(q.get("difficulty") or "medium").lower()
+        if diff not in {"easy", "medium", "hard"}:
+            diff = "medium"
+        out.append(
+            {
+                "id": qid,
+                "question_id": qid,
+                "text": str(q.get("question") or ""),
+                "question_text": str(q.get("question") or ""),
+                "difficulty": diff,
+                "options": choices,
+                "correct_answer": letters[correct_idx] if correct_idx < len(letters) else "A",
+                "correct_index": correct_idx,
+                "explanation": str(q.get("explanation") or ""),
+            }
+        )
+    return out
+
+
 class OrchestratorService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -83,7 +146,9 @@ class OrchestratorService:
         self.lesson_validator = LessonValidatorAgent()
         self.qa_generator = QAGeneratorAgent(self.llm, self.rag)
         self.qa_validator = QAValidatorAgent()
-        self.analytics_agent = AnalyticsAgent()
+        self.exam_generator = ExamGeneratorAgent(self.llm, self.rag)
+        self.exam_validator = ExamValidatorAgent()
+        self.analytics_agent = AnalyticsAgent(self.llm)
         self.assessment_service = AssessmentService(self.llm)
         self.lesson_progress_repo = LessonProgressRepository(db)
 
@@ -97,6 +162,49 @@ class OrchestratorService:
         _, blocks, pmap = await self._course_progression_context(user_id, course_id)
         if not can_user_access_lesson(lesson_id=lesson_id, blocks=blocks, passed_map=pmap):
             raise LessonLockedError()
+
+    async def get_lessons_progress(self, user_id: int, course_id: int) -> dict:
+        from app.services.orchestrator.lesson_access import (
+            assessable_sequence_ids,
+            block_for_lesson,
+            can_user_access_lesson,
+            is_block_fully_passed,
+        )
+
+        course = await self.course_repo.get_course_with_lessons(course_id)
+        if course is None or course.user_id != user_id:
+            raise ValueError("Course not found")
+
+        lessons, blocks, pmap = await self._course_progression_context(user_id, course_id)
+        details = await self.lesson_progress_repo.get_details_map(user_id, [L.id for L in lessons])
+        assessable_ids = assessable_sequence_ids(blocks)
+        completed = sum(1 for aid in assessable_ids if pmap.get(aid, False))
+
+        lesson_entries: dict[str, dict] = {}
+        for les in lessons:
+            block = block_for_lesson(blocks, les.id)
+            block_passed = is_block_fully_passed(block, pmap) if block else bool(pmap.get(les.id, False))
+            detail = details.get(les.id, {})
+            lesson_entries[f"lesson_{les.id}"] = {
+                "passed": bool(pmap.get(les.id, False)),
+                "accessible": can_user_access_lesson(
+                    lesson_id=les.id,
+                    blocks=blocks,
+                    passed_map=pmap,
+                ),
+                "block_passed": block_passed,
+                "attempts": int(detail.get("attempts") or 0),
+                "last_score": detail.get("last_score"),
+            }
+
+        total = len(assessable_ids)
+        return {
+            "course_id": course_id,
+            "completed_assessable": completed,
+            "total_assessable": total,
+            "overall_percent": round(100.0 * completed / total, 1) if total else 0.0,
+            "lessons": lesson_entries,
+        }
 
     async def _sync_parent_passed_if_subs_done(self, user_id: int, parent_lesson_id: int | None) -> None:
         if not parent_lesson_id:
@@ -228,7 +336,87 @@ class OrchestratorService:
             f"- Retry generation later for a richer, personalized version.\n"
         )
 
-    async def build_analytics_summary(self, user_id: int, track: str | None = None) -> dict:
+    @staticmethod
+    def _build_personal_syllabus(lessons: list) -> list[dict]:
+        root = [l for l in lessons if not getattr(l, "is_sub_lesson", False)]
+        ordered = sorted(root or lessons, key=lambda l: l.order_index)
+        topics: dict[str, dict] = {}
+        for lesson in ordered:
+            topic = str(getattr(lesson, "topic", "") or "").replace("_", " ").strip()
+            if not topic:
+                topic = str(getattr(lesson, "title", "") or "").strip()
+            if not topic:
+                continue
+            if topic not in topics:
+                topics[topic] = {"topic": topic, "subtopics": [], "order": len(topics)}
+            title = str(getattr(lesson, "title", "") or "").strip()
+            if title and title not in topics[topic]["subtopics"]:
+                topics[topic]["subtopics"].append(title)
+        return list(topics.values())
+
+    @staticmethod
+    def _build_interaction_logs(lessons: list, progresses: list) -> list[dict]:
+        lesson_by_id = {int(l.id): l for l in lessons}
+        logs: list[dict] = []
+        for progress in progresses:
+            lesson = lesson_by_id.get(int(progress.lesson_id))
+            if lesson is None:
+                continue
+            topic = str(getattr(lesson, "topic", "") or "").replace("_", " ")
+            updated = getattr(progress, "updated_at", None) or getattr(progress, "created_at", None)
+            ts = updated.isoformat() if updated is not None else ""
+            attempts = int(getattr(progress, "attempts", 0) or 0)
+            last_score = getattr(progress, "last_score", None)
+            passed = bool(getattr(progress, "passed", False))
+            if attempts > 0 and last_score is not None:
+                logs.append(
+                    {
+                        "type": "quiz",
+                        "topic": topic,
+                        "score": float(last_score) / 5.0,
+                        "timestamp": ts,
+                    }
+                )
+            elif passed:
+                logs.append({"type": "lesson_done", "topic": topic, "score": 1.0, "timestamp": ts})
+            elif str(getattr(lesson, "markdown_content", "") or "").strip():
+                logs.append({"type": "lesson_done", "topic": topic, "score": None, "timestamp": ts})
+        logs.sort(key=lambda row: str(row.get("timestamp") or ""))
+        return logs
+
+    @staticmethod
+    def _seed_mastery_state(
+        syllabus: list[dict],
+        strong_topics: list[str],
+        weak_topics: list[str],
+    ) -> dict[str, float]:
+        mastery: dict[str, float] = {}
+        for row in syllabus:
+            topic = str(row.get("topic") or "").strip()
+            if topic:
+                mastery[topic] = 0.5
+
+        def _match_topic(label: str) -> str | None:
+            needle = label.replace("_", " ").strip().lower()
+            if not needle:
+                return None
+            for row in syllabus:
+                topic = str(row.get("topic") or "").strip()
+                if topic.lower() == needle or needle in topic.lower() or topic.lower() in needle:
+                    return topic
+            return None
+
+        for raw in strong_topics:
+            matched = _match_topic(str(raw))
+            if matched:
+                mastery[matched] = 0.65
+        for raw in weak_topics:
+            matched = _match_topic(str(raw))
+            if matched:
+                mastery[matched] = 0.3
+        return mastery
+
+    async def _gather_track_analytics_context(self, user_id: int, track: str | None) -> dict:
         from app.models.entities import Course, Lesson, LessonProgress, PlacementTest
 
         track_key = self._normalize_track_key(track)
@@ -253,10 +441,14 @@ class OrchestratorService:
             str(placement_result.get("level") or placement_result.get("final_level") or "").strip() or None
         )
         strong_topics = [
-            str(x).strip() for x in (placement_result.get("strong_topics") or placement_session.get("strong_concepts") or []) if str(x).strip()
+            str(x).strip()
+            for x in (placement_result.get("strong_topics") or placement_session.get("strong_concepts") or [])
+            if str(x).strip()
         ]
         weak_topics = [
-            str(x).strip() for x in (placement_result.get("weak_topics") or placement_session.get("wrong_concepts") or []) if str(x).strip()
+            str(x).strip()
+            for x in (placement_result.get("weak_topics") or placement_session.get("wrong_concepts") or [])
+            if str(x).strip()
         ]
         recommended_start_topic = str(placement_result.get("recommended_start_topic") or "").strip() or None
         total_answered = int(placement_session.get("answered_total") or 0)
@@ -282,8 +474,18 @@ class OrchestratorService:
             progresses = progress_rows.scalars().all()
         else:
             progresses = []
+
         passed_count = sum(1 for p in progresses if bool(p.passed))
         lesson_completion_rate = (passed_count / lesson_count) if lesson_count > 0 else 0.0
+        passed_lesson_ids = {int(p.lesson_id) for p in progresses if bool(p.passed)}
+        completed_lessons = [str(l.title).strip() for l in lessons if l.id in passed_lesson_ids and str(l.title).strip()]
+        pending_lessons = [str(l.title).strip() for l in lessons if l.id not in passed_lesson_ids and str(l.title).strip()]
+        completed_topics = [str(l.topic).replace("_", " ").strip() for l in lessons if l.id in passed_lesson_ids and str(l.topic).strip()]
+        pending_topics = [str(l.topic).replace("_", " ").strip() for l in lessons if l.id not in passed_lesson_ids and str(l.topic).strip()]
+
+        personal_syllabus = self._build_personal_syllabus(lessons)
+        interaction_logs = self._build_interaction_logs(lessons, progresses)
+        mastery_state = self._seed_mastery_state(personal_syllabus, strong_topics, weak_topics)
 
         if track_key == "deep_learning":
             course_title = "Deep Learning Foundations"
@@ -310,9 +512,56 @@ class OrchestratorService:
             "lesson_count": lesson_count,
             "generated_lesson_count": generated_lesson_count,
             "lesson_completion_rate": round(float(lesson_completion_rate), 4),
+            "completed_lessons": list(dict.fromkeys(completed_lessons))[:20],
+            "pending_lessons": list(dict.fromkeys(pending_lessons))[:20],
+            "completed_topics": list(dict.fromkeys(completed_topics))[:20],
+            "pending_topics": list(dict.fromkeys(pending_topics))[:20],
+            "personal_syllabus": personal_syllabus,
+            "mastery_state": mastery_state,
+            "interaction_logs": interaction_logs,
         }
 
+        return {
+            "track_key": track_key,
+            "course_title": course_title,
+            "subject": subject,
+            "source": source,
+            "metrics": metrics,
+        }
+
+    async def _run_analytics_for_event(
+        self,
+        user_id: int,
+        track: str | None,
+        current_event: dict,
+    ) -> dict:
+        ctx = await self._gather_track_analytics_context(user_id, track)
+        state = {
+            "student_id": str(user_id),
+            "personal_syllabus": ctx["metrics"]["personal_syllabus"],
+            "mastery_state": ctx["metrics"]["mastery_state"],
+            "interaction_logs": ctx["metrics"]["interaction_logs"],
+            "current_event": current_event,
+        }
+        output = self.analytics_agent.process(state)
+        await log_agent_run(
+            self.agent_repo,
+            agent_name=self.analytics_agent.name,
+            stage="process_event",
+            input_json={"track": ctx["track_key"], "event": current_event},
+            output_json=output,
+            is_valid=True,
+            user_id=user_id,
+        )
+        return self.analytics_agent.to_analytics_payload(output)
+
+    async def build_analytics_summary(self, user_id: int, track: str | None = None) -> dict:
+        ctx = await self._gather_track_analytics_context(user_id, track)
+        track_key = ctx["track_key"]
+        metrics = ctx["metrics"]
+
         insights = self.analytics_agent.generate(metrics)
+        agent_output = insights.pop("agent_output", None)
         await log_agent_run(
             self.agent_repo,
             agent_name=self.analytics_agent.name,
@@ -329,12 +578,13 @@ class OrchestratorService:
             "result": {
                 "course_context": {
                     "track": track_key,
-                    "course_title": course_title,
-                    "subject": subject,
-                    "source": source,
+                    "course_title": ctx["course_title"],
+                    "subject": ctx["subject"],
+                    "source": ctx["source"],
                 },
                 "metrics": metrics,
                 "insights": insights,
+                "agent_output": agent_output,
             },
         }
 
@@ -689,8 +939,9 @@ class OrchestratorService:
         if placement is None or placement.user_id != user_id:
             raise ValueError("Placement test not found")
         score = placement.score or 0
-        pj = placement.questions_json
-        sess = pj.get("placement_session") if isinstance(pj, dict) else {}
+        pj = _questions_json_as_dict(placement.questions_json)
+        ps_raw = pj.get("placement_session")
+        sess = ps_raw if isinstance(ps_raw, dict) else {}
         track = normalize_track(sess.get("track") if isinstance(sess, dict) else None)
         fl = sess.get("final_level") if isinstance(sess, dict) else None
         if fl:
@@ -714,7 +965,7 @@ class OrchestratorService:
                 weak_topics=weak_topics,
                 strong_topics=strong_topics,
             )
-        except AgentValidationError:
+        except (AgentValidationError, LLMClientError):
             raw_syllabus = _build_local_syllabus_payload(
                 level_str,
                 track=track,
@@ -730,22 +981,25 @@ class OrchestratorService:
                 weak_topics=weak_topics,
                 strong_topics=strong_topics,
             )
-        await log_agent_run(
-            self.agent_repo,
-            agent_name=self.syllabus_generator.name,
-            stage="generate",
-            input_json={
-                "placement_id": placement_id,
-                "score": score,
-                "level": level_str,
-                "course_title": course_title,
-                "weak_topics": weak_topics,
-                "strong_topics": strong_topics,
-            },
-            output_json=raw_syllabus,
-            is_valid=True,
-            user_id=user_id,
-        )
+        try:
+            await log_agent_run(
+                self.agent_repo,
+                agent_name=self.syllabus_generator.name,
+                stage="generate",
+                input_json={
+                    "placement_id": placement_id,
+                    "score": score,
+                    "level": level_str,
+                    "course_title": course_title,
+                    "weak_topics": weak_topics,
+                    "strong_topics": strong_topics,
+                },
+                output_json=_json_for_agent_log(raw_syllabus),
+                is_valid=True,
+                user_id=user_id,
+            )
+        except Exception as exc:
+            logger.warning("agent_repo.log_run syllabus generate skipped: %s", exc)
         generated = await validate_and_log(
             self.agent_repo,
             validator_name=self.syllabus_validator.name,
@@ -761,12 +1015,24 @@ class OrchestratorService:
             rubric_topic = str(lesson.get("topic") or "").strip()
             display_title = str(lesson.get("title") or rubric_topic).strip()
             ch_ref = lesson.get("chapter_ref")
+            meta: dict = {}
+            if ch_ref is not None:
+                try:
+                    meta = {"chapter_ref": int(ch_ref)}
+                except (TypeError, ValueError):
+                    meta = {}
+            topic_slug = _topic_slug(rubric_topic)[:100]
+            raw_pre = lesson.get("prerequisites", [])
+            if isinstance(raw_pre, list):
+                prereqs = [str(x).strip() for x in raw_pre if str(x).strip()]
+            else:
+                prereqs = []
             transformed_lessons.append({
-                "title": display_title,
-                "topic": _topic_slug(rubric_topic),
-                "prerequisites": lesson.get("prerequisites", []),
+                "title": display_title[:255],
+                "topic": topic_slug,
+                "prerequisites": prereqs,
                 "markdown_content": str(lesson.get("description") or ""),
-                "unit_title": (str(lesson.get("unit_title")).strip() if lesson.get("unit_title") else None),
+                "unit_title": (str(lesson.get("unit_title")).strip()[:255] if lesson.get("unit_title") else None),
                 "metadata_json": (
                     {"chapter_ref": int(ch_ref), "track": track}
                     if ch_ref is not None
@@ -774,9 +1040,10 @@ class OrchestratorService:
                 ),
             })
 
+        safe_title = (course_title or "My course").strip()[:255]
         course = await self.course_repo.create_course_with_lessons(
             user_id=user_id,
-            title=course_title,
+            title=safe_title,
             level=level_str.replace("_", " ").title(),
             lessons=transformed_lessons,
         )
@@ -1090,6 +1357,298 @@ class OrchestratorService:
         )
         return qa_envelope(generated)
 
+    async def _latest_placement_topics(self, user_id: int, track: str) -> tuple[list[str], list[str]]:
+        from app.models.entities import PlacementTest
+
+        track_key = self._normalize_track_key(track)
+        placement_rows = await self.db.execute(
+            select(PlacementTest).where(PlacementTest.user_id == user_id).order_by(PlacementTest.created_at.desc())
+        )
+        for placement in placement_rows.scalars().all():
+            if self._placement_track(placement.questions_json) != track_key:
+                continue
+            data = placement.questions_json if isinstance(placement.questions_json, dict) else {}
+            result = data.get("placement_result") if isinstance(data.get("placement_result"), dict) else {}
+            sess = data.get("placement_session") if isinstance(data.get("placement_session"), dict) else {}
+            weak = [
+                str(x).strip()
+                for x in (result.get("weak_topics") or sess.get("wrong_concepts") or [])
+                if str(x).strip()
+            ]
+            strong = [
+                str(x).strip()
+                for x in (result.get("strong_topics") or sess.get("strong_concepts") or [])
+                if str(x).strip()
+            ]
+            return list(dict.fromkeys(weak))[:10], list(dict.fromkeys(strong))[:10]
+        return [], []
+
+    async def generate_exam(
+        self,
+        user_id: int,
+        lesson_id: int,
+        level: str = "beginner",
+        question_count: int = 5,
+    ) -> dict:
+        if question_count not in {3, 5, 10}:
+            raise ValueError("question_count must be 3, 5, or 10")
+
+        lesson = await self.course_repo.get_lesson_with_course(lesson_id)
+        if lesson is None:
+            raise ValueError("Lesson not found")
+        if lesson.course is None or lesson.course.user_id != user_id:
+            raise ValueError("Lesson not found")
+
+        course = lesson.course
+        course_level = _normalized_course_level(course.level)
+        track = self._track_from_lesson_context(lesson, course)
+        weak_topics, strong_topics = await self._latest_placement_topics(user_id, track)
+
+        markdown = (lesson.markdown_content or "").strip()
+        if not markdown:
+            markdown = self._fallback_lesson_markdown(
+                title=lesson.title,
+                topic=lesson.topic,
+                track=track,
+                level=course_level,
+            )
+
+        progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
+        prior = progress.current_questions_json if isinstance(progress.current_questions_json, list) else []
+        previous_stems = [
+            str(q.get("question") or "").strip()
+            for q in prior
+            if isinstance(q, dict) and str(q.get("question") or "").strip()
+        ]
+        attempt_number = max(1, int(progress.attempts or 0) + 1)
+
+        exam_input = {
+            "lesson_id": lesson_id,
+            "level": level,
+            "question_count": question_count,
+            "topic": lesson.topic,
+            "track": track,
+        }
+        generated: dict | None = None
+        used_llm = True
+        last_exc: AgentValidationError | None = None
+        for attempt in range(3):
+            try:
+                raw = self.exam_generator.generate(
+                    lesson_title=lesson.title,
+                    topic=lesson.topic,
+                    track=track,
+                    level=level,
+                    question_count=question_count,
+                    lesson_markdown=markdown,
+                    weak_topics=weak_topics,
+                    strong_topics=strong_topics,
+                    previous_stems=previous_stems,
+                    attempt_number=attempt_number + attempt,
+                )
+            except AgentValidationError as exc:
+                last_exc = exc
+                used_llm = False
+                raw = self.exam_generator._fallback_questions(
+                    topic=lesson.topic,
+                    level=level,
+                    lesson_title=lesson.title,
+                    question_count=question_count,
+                    attempt_number=attempt_number + attempt,
+                    previous_stems=previous_stems,
+                )
+            await log_agent_run(
+                self.agent_repo,
+                agent_name=self.exam_generator.name,
+                stage="generate",
+                input_json={**exam_input, "attempt": attempt + 1},
+                output_json=_json_for_agent_log(raw if isinstance(raw, dict) else {"raw": str(raw)[:500]}),
+                is_valid=True,
+                user_id=user_id,
+            )
+            try:
+                generated = self.exam_validator.validate(raw, question_count=question_count)
+            except AgentValidationError as exc:
+                last_exc = exc
+                await log_agent_run(
+                    self.agent_repo,
+                    agent_name=self.exam_validator.name,
+                    stage="validate",
+                    input_json={**exam_input, "attempt": attempt + 1},
+                    output_json={"error": str(exc)},
+                    is_valid=False,
+                    user_id=user_id,
+                )
+                generated = None
+                continue
+            await log_agent_run(
+                self.agent_repo,
+                agent_name=self.exam_validator.name,
+                stage="validate",
+                input_json={**exam_input, "attempt": attempt + 1},
+                output_json=generated,
+                is_valid=True,
+                user_id=user_id,
+            )
+            break
+
+        if not generated:
+            used_llm = False
+            raw = self.exam_generator._fallback_questions(
+                topic=lesson.topic,
+                level=level,
+                lesson_title=lesson.title,
+                question_count=question_count,
+                attempt_number=attempt_number + 3,
+                previous_stems=previous_stems,
+            )
+            generated = self.exam_validator.validate(raw, question_count=question_count)
+            await log_agent_run(
+                self.agent_repo,
+                agent_name=self.exam_generator.name,
+                stage="generate_fallback",
+                input_json={**exam_input, "reason": str(last_exc or "validation retries exhausted")},
+                output_json=generated,
+                is_valid=True,
+                user_id=user_id,
+            )
+
+        stored = _assign_question_ids(list(generated.get("questions") or []))
+        progress.current_questions_json = stored
+        progress.attempts = attempt_number
+        await self.lesson_progress_repo.save(progress)
+
+        frontend_questions = _exam_questions_for_frontend(stored)
+        return {
+            "status": "ok",
+            "intent": "exam_generation",
+            "result": {
+                "status": "generated",
+                "lesson_id": f"lesson_{lesson.id}",
+                "questions": frontend_questions,
+                "llm_used": used_llm,
+                "attempt_number": attempt_number,
+            },
+        }
+
+    async def grade_exam(self, user_id: int, lesson_id: int, answers: list[dict]) -> dict:
+        lesson = await self.course_repo.get_lesson_with_course(lesson_id)
+        if lesson is None:
+            raise ValueError("Lesson not found")
+        if lesson.course is None or lesson.course.user_id != user_id:
+            raise ValueError("Lesson not found")
+
+        progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
+        questions = progress.current_questions_json or []
+        if not isinstance(questions, list) or not questions:
+            raise ValueError("No active exam session for this lesson. Generate an exam first.")
+
+        answer_map: dict[str, int] = {}
+        for a in answers:
+            if not isinstance(a, dict):
+                continue
+            qid = str(a.get("question_id") or "").strip()
+            try:
+                answer_map[qid] = int(a.get("answer_index"))
+            except (TypeError, ValueError):
+                continue
+
+        letters = ["A", "B", "C", "D"]
+        score = 0
+        per_question: list[dict] = []
+        exam_analytics_questions: list[dict] = []
+        difficulty_breakdown: dict[str, int] = {"easy": 0, "medium": 0, "hard": 0}
+
+        for idx, q in enumerate(questions):
+            if not isinstance(q, dict):
+                continue
+            qid = str(q.get("id") or f"q{idx}")
+            choices = q.get("choices") or []
+            if not isinstance(choices, list):
+                choices = []
+            correct_answer = str(q.get("correct_answer") or "").strip()
+            correct_idx = 0
+            for j, c in enumerate(choices):
+                if str(c).strip() == correct_answer:
+                    correct_idx = j
+                    break
+            selected_idx = answer_map.get(qid)
+            is_correct = selected_idx is not None and selected_idx == correct_idx
+            if is_correct:
+                score += 1
+            diff = str(q.get("difficulty") or "medium").lower()
+            if diff not in {"easy", "medium", "hard"}:
+                diff = "medium"
+            if diff in difficulty_breakdown:
+                difficulty_breakdown[diff] += 1 if is_correct else 0
+            exam_analytics_questions.append({"correct": is_correct, "difficulty": diff})
+            per_question.append(
+                {
+                    "question_id": qid,
+                    "question_text": str(q.get("question") or ""),
+                    "correct": is_correct,
+                    "student_answer": letters[selected_idx] if selected_idx is not None and 0 <= selected_idx < 4 else "—",
+                    "correct_answer": letters[correct_idx] if correct_idx < 4 else "A",
+                    "explanation": str(q.get("explanation") or ""),
+                }
+            )
+
+        total = len(questions)
+        overall_score = int(round(100 * score / total)) if total else 0
+        progress.last_score = score
+        await self.lesson_progress_repo.save(progress)
+
+        await log_agent_run(
+            self.agent_repo,
+            agent_name="exam-grader",
+            stage="grade",
+            input_json={"lesson_id": lesson_id, "answer_count": len(answers)},
+            output_json={
+                "score": score,
+                "total": total,
+                "overall_score": overall_score,
+                "results": per_question,
+            },
+            is_valid=True,
+            user_id=user_id,
+        )
+
+        analytics = None
+        try:
+            track = self._track_from_lesson_context(lesson, lesson.course)
+            analytics = await self._run_analytics_for_event(
+                user_id=user_id,
+                track=track,
+                current_event={
+                    "type": "exam",
+                    "payload": {
+                        "topic": lesson.topic,
+                        "questions": exam_analytics_questions,
+                    },
+                },
+            )
+        except Exception as exc:
+            logger.warning("analytics after exam grade skipped: %s", exc)
+
+        result_payload: dict = {
+            "status": "graded",
+            "lesson_id": f"lesson_{lesson.id}",
+            "score": score,
+            "total": total,
+            "overall_score": overall_score,
+            "passed": overall_score >= 60,
+            "difficulty_breakdown": difficulty_breakdown,
+            "results": per_question,
+        }
+        if analytics is not None:
+            result_payload["analytics"] = analytics
+
+        return {
+            "status": "ok",
+            "intent": "exam_grading",
+            "result": result_payload,
+        }
+
     async def run_exam_code(self, code: str) -> dict:
         result = run_exam_code_in_sandbox(code)
         return {"stdout": result.stdout, "stderr": result.stderr, "return_code": result.return_code}
@@ -1291,7 +1850,25 @@ class OrchestratorService:
             await self.lesson_progress_repo.save(progress)
             await self._sync_parent_passed_if_subs_done(user_id, lesson.parent_lesson_id)
             next_lesson_id = await self.course_repo.get_next_lesson_id(lesson)
-            return {"passed": True, "score": score, "next_lesson": next_lesson_id}
+            payload: dict = {"passed": True, "score": score, "next_lesson": next_lesson_id}
+            try:
+                track = self._track_from_lesson_context(lesson, lesson.course)
+                payload["analytics"] = await self._run_analytics_for_event(
+                    user_id=user_id,
+                    track=track,
+                    current_event={
+                        "type": "lesson_done",
+                        "payload": {
+                            "topic": lesson.topic,
+                            "passed": True,
+                            "quiz_taken": True,
+                            "score_ratio": float(score) / 5.0,
+                        },
+                    },
+                )
+            except Exception as exc:
+                logger.warning("analytics after lesson assessment skipped: %s", exc)
+            return payload
 
         # Failed attempt
         if progress.attempts < 3:

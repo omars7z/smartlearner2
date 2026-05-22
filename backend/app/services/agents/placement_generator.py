@@ -1,4 +1,6 @@
 import difflib
+import random
+import uuid
 
 from app.core.placement_rubric import (
     chapter_scope_for_level,
@@ -37,13 +39,49 @@ DEFAULT_PLACEMENT_USER_PROMPT_TEMPLATE = (
     "RAG context:\n{chunk_text}\n\n"
     "Rubric objective (you MUST test THIS concept and ONLY this concept): {rubric_concept}\n"
     "Question slot {slot} of {question_count}.\n"
+    "Session variation id: {variation_id} (use this to pick a fresh scenario; do not copy textbook defaults).\n"
+    "Scenario direction: {scenario_hint}\n"
     "Write ONE multiple-choice question that:\n"
     "- Tests ONLY the rubric objective above\n"
     "- Uses vocabulary and difficulty appropriate for {lvl} level\n"
     "- Does NOT introduce concepts from other levels or chapters\n"
     "- Does NOT repeat wording, scenarios, or stems from other slots in this test\n"
+    "- Avoid overused examples such as x = 3.14, x = 42, or name = \"Alice\" unless you change the angle\n"
     "Return JSON only."
 )
+
+# Per-concept scenario nudges so repeated sessions don't always get the same LLM default stem.
+_SCENARIO_HINTS_BY_CONCEPT: dict[str, tuple[str, ...]] = {
+    "Variables, values, and types": (
+        "Ask about type() or isinstance() for a string literal like 'hello'.",
+        "Use an integer variable such as age = 21 and ask for its type.",
+        "Use a boolean from a comparison, e.g. is_active = 5 > 3.",
+        "Use a list literal like items = [1, 2, 3] and ask for the type of items.",
+        "Use None assignment x = None and ask what type(x) returns.",
+        "Use a variable reassigned from int to str and ask about the final type.",
+    ),
+    "Expressions and operators": (
+        "Use floor division or modulo with integers.",
+        "Use string concatenation with + on two str literals.",
+        "Use mixed int/float arithmetic and ask which type the result has.",
+        "Use parentheses to change order of operations in a numeric expression.",
+    ),
+    "Conditionals": (
+        "Use if/elif/else with numeric thresholds.",
+        "Use a nested conditional with string comparison.",
+        "Use and/or in a compound boolean condition.",
+    ),
+}
+
+
+def _scenario_hint_for(concept: str, attempt: int) -> str:
+    hints = _SCENARIO_HINTS_BY_CONCEPT.get(concept)
+    if not hints:
+        return (
+            f"Pick scenario variant #{attempt + 1}: use a different variable name, "
+            "context, and code snippet than typical textbook examples."
+        )
+    return hints[(attempt + random.randint(0, len(hints) - 1)) % len(hints)]
 
 
 def _placement_question_too_similar(candidate: str, prior_texts: list[str], *, max_ratio: float) -> bool:
@@ -174,6 +212,7 @@ class PlacementGeneratorAgent(AgentPair):
             ]
 
         questions: list[dict] = []
+        session_variation_id = uuid.uuid4().hex[:10]
 
         for idx in range(question_count):
             rubric_concept = forced_concepts[idx]
@@ -183,20 +222,32 @@ class PlacementGeneratorAgent(AgentPair):
             )
             if not slot_chunks:
                 slot_chunks = pool_fallback
-            chunk_text = "\n\n---\n\n".join(slot_chunks[:5]).strip()
-            user_prompt = user_tpl.format(
-                lvl=lvl,
-                chunk_text=chunk_text,
-                rubric_concept=rubric_concept,
-                slot=idx + 1,
-                question_count=question_count,
+            picked_chunks = (
+                random.sample(slot_chunks, k=min(5, len(slot_chunks)))
+                if len(slot_chunks) > 1
+                else slot_chunks[:5]
             )
+            chunk_text = "\n\n---\n\n".join(picked_chunks).strip()
             prior_stems = [str(q.get("question", "")).strip() for q in questions if q.get("question")]
             rejected_similar_in_slot: list[str] = []
             # Later slots get more attempts and a looser similarity cap (models repeat "What prints?" patterns).
             similarity_cap = min(0.82, 0.72 + idx * 0.025)
             max_attempts = 10 if idx >= 2 else 8
-            for _ in range(max_attempts):
+            for attempt in range(max_attempts):
+                user_prompt = user_tpl.format(
+                    lvl=lvl,
+                    chunk_text=chunk_text,
+                    rubric_concept=rubric_concept,
+                    slot=idx + 1,
+                    question_count=question_count,
+                    variation_id=f"{session_variation_id}-s{idx + 1}-a{attempt + 1}",
+                    scenario_hint=_scenario_hint_for(rubric_concept, attempt),
+                )
+                if rejected_similar_in_slot:
+                    user_prompt += (
+                        "\n\nPreviously rejected stems (do NOT repeat or paraphrase closely):\n"
+                        + "\n".join(f"- {s}" for s in rejected_similar_in_slot[-4:])
+                    )
                 payload = self._generate_with_retries(
                     model=self.settings.smart_model,
                     system_prompt=sys_prompt,
