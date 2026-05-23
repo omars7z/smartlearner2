@@ -71,7 +71,8 @@ class ExamExecutionRequest(BaseModel):
 
 class ExamGenerateRequest(BaseModel):
     lesson_id: str
-    level: Literal["beginner", "intermediate", "advanced"] = "beginner"
+    course_id: int | None = None
+    level: Literal["beginner", "intermediate", "advanced", "very_advanced"] = "beginner"
     question_count: int = Field(default=5, ge=3, le=10)
 
 
@@ -82,6 +83,7 @@ class ExamGradeAnswerDto(BaseModel):
 
 class ExamGradeRequest(BaseModel):
     lesson_id: str
+    course_id: int | None = None
     answers: list[ExamGradeAnswerDto] = Field(default_factory=list, min_length=1, max_length=10)
 
 

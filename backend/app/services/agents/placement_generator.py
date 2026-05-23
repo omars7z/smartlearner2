@@ -182,7 +182,9 @@ class PlacementGeneratorAgent(AgentPair):
             else system_prompt.strip()
         )
         if track_key in {"deep_learning", "dl"}:
-            source_label = "Deep Learning (Goodfellow, Bengio, Courville; MIT Press, https://www.deeplearningbook.org/)"
+            from app.core.deep_learning_curriculum import DL_SOURCE_RESOURCE
+
+            source_label = DL_SOURCE_RESOURCE
         else:
             source_label = "Python for Everybody (University of Michigan)"
         sys_prompt = (
@@ -207,8 +209,8 @@ class PlacementGeneratorAgent(AgentPair):
                 "Python for Everybody (PY4E) foundations: variables, expressions, conditionals, strings, "
                 "basic I/O, and reading small programs including errors and tracebacks."
                 if track_key not in {"deep_learning", "dl"}
-                else "Deep Learning foundations: vectors, matrices, gradients, data splits, linear models, "
-                "and evaluating simple predictors."
+                else "AI342 Deep Learning: introduction, logistic regression, gradient descent, "
+                "feed-forward networks, CNNs, sequence models, and evaluation metrics."
             ]
 
         questions: list[dict] = []

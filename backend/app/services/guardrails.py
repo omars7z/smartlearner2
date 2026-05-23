@@ -144,13 +144,14 @@ def validate_content_scope(markdown: str, *, track: str = "python") -> tuple[boo
             phrase in lowered
             for phrase in (
                 "deep learning",
-                "deeplearningbook.org",
-                "goodfellow",
-                "bengio",
-                "courville",
+                "ai342",
+                "lecture material",
+                "gradient descent",
+                "neural network",
+                "logistic regression",
             )
         ):
-            return False, "Lesson must cite the canonical deep learning source (Goodfellow et al.)."
+            return False, "Lesson must cite AI342 deep learning course materials or core DL concepts."
     elif "python for everybody" not in lowered:
         return False, "Lesson must cite the canonical source."
     return True, "ok"

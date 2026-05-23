@@ -63,9 +63,11 @@ class QAGeneratorAgent(AgentPair):
         safe_question = sanitize_prompt(question)
         track_key = (track or "python").strip().lower().replace("-", "_")
         if track_key in {"deep_learning", "dl"}:
-            source_label = "Deep Learning (Goodfellow, Bengio, Courville; MIT Press)"
-            default_course = "Deep Learning Foundations"
-            source_ref = "https://www.deeplearningbook.org/"
+            from app.core.deep_learning_curriculum import DL_SOURCE_RESOURCE
+
+            source_label = DL_SOURCE_RESOURCE
+            default_course = "Deep Learning (AI342)"
+            source_ref = "AI342 lecture materials (JUST)"
         else:
             source_label = "Python for Everybody (Charles Severance, University of Michigan; Coursera)"
             default_course = "Python for Everybody"

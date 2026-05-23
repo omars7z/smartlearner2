@@ -1,5 +1,5 @@
 {
-  "total_chunks": 419,
+  "total_chunks": 574,
   "by_topic": {
     "introduction": 46,
     "python_basics": 24,
@@ -15,10 +15,17 @@
     "web_services": 14,
     "oop": 26,
     "databases": 49,
-    "visualization": 21
+    "visualization": 21,
+    "ml_dl_overview": 13,
+    "logistic_regression": 34,
+    "mlp": 23,
+    "conv": 42,
+    "rnn": 28,
+    "classification_metrics": 15
   },
   "by_track": {
-    "Python Foundations": 419
+    "Python Foundations": 419,
+    "Deep Learning": 155
   },
   "embed_model": "all-MiniLM-L6-v2"
 }

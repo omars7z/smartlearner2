@@ -67,6 +67,7 @@ The database file is stored in a Docker volume at `/data` inside the backend con
 | `backend/app/` | FastAPI app, routes, agents, RAG |
 | `backend/vector_db/` | Serialized chunks for retrieval |
 | `frontend/src/` | React UI |
+| `docs/USER-GUIDE.md` | **Student user guide** (placement → syllabus → lessons → Q&A → exams) |
 
 ## License
 

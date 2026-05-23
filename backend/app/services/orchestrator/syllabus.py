@@ -2,6 +2,7 @@ import re
 
 from app.core.placement_rubric import normalize_level, normalize_track
 from app.services.agents.syllabus_common import (
+    lesson_title_from_topic,
     syllabus_allowed_topics_ordered,
     syllabus_rubric_concepts_for_level,
 )
@@ -50,30 +51,10 @@ def build_local_syllabus_payload(
     concept_priority = _prioritized_concepts(concepts, weak_topics=weak_topics, strong_topics=strong_topics)
 
     if normalize_track(norm_track) in {"deep_learning", "dl"}:
-        chapter_map = {
-            "beginner": [1, 2, 3, 4],
-            "intermediate": [5, 6, 7, 8],
-            "advanced": [9, 10, 11, 12],
-            "very_advanced": [13, 14, 15, 16],
-        }
-        chapter_titles = {
-            1: "Math Foundations",
-            2: "Python for Deep Learning",
-            3: "Data Pipelines and Splits",
-            4: "Linear and Logistic Models",
-            5: "Neural Network Fundamentals",
-            6: "Backpropagation",
-            7: "Optimization",
-            8: "Generalization and Regularization",
-            9: "Convolutional Networks",
-            10: "Sequence Models",
-            11: "Transformers",
-            12: "Training Systems",
-            13: "Generative Modeling",
-            14: "Reinforcement Learning",
-            15: "Scaling Laws and LLM Training",
-            16: "MLOps for Deep Learning",
-        }
+        from app.core.deep_learning_curriculum import DL_CHAPTERS_BY_LEVEL, DL_CHAPTER_TITLES
+
+        chapter_map = {lvl: list(chs) for lvl, chs in DL_CHAPTERS_BY_LEVEL.items()}
+        chapter_titles = dict(DL_CHAPTER_TITLES)
     else:
         chapter_map = {
             "beginner": [1, 2, 3, 6],
@@ -121,7 +102,7 @@ def build_local_syllabus_payload(
             lessons.append(
                 {
                     "topic": t,
-                    "lesson_title": f"{t}",
+                    "lesson_title": lesson_title_from_topic(t, track=norm_track),
                     "description": (
                         (
                             f"Learn {t} through practical deep learning examples and experiments. "

@@ -1,4 +1,5 @@
 from app.core.config import get_settings
+from app.core.deep_learning_curriculum import DL_SOURCE_RESOURCE, DL_SOURCE_SCOPE
 from app.services.agents.base import AgentValidationError
 from app.services.guardrails import has_python3_hallucinations
 
@@ -29,9 +30,8 @@ class QAValidatorAgent:
         if track_key in {"deep_learning", "dl"}:
             required_substring = "deep learning"
             source_suffix = (
-                "\n\n(Source grounding: Deep Learning (Goodfellow, Bengio, Courville; MIT Press); "
-                "resource: https://www.deeplearningbook.org/; "
-                "scope: deep learning lecture-note style foundations and practical modeling concepts.)"
+                f"\n\n(Source grounding: {DL_SOURCE_RESOURCE}; "
+                f"scope: {DL_SOURCE_SCOPE}.)"
             )
         else:
             required_substring = "python for everybody"

@@ -1,5 +1,9 @@
 import json
 
+from app.core.deep_learning_curriculum import (
+    allowed_chapter_numbers_by_level,
+    allowed_chapters_for_level,
+)
 from app.core.placement_rubric import (
     DEEP_LEARNING_PLACEMENT_CONCEPTS_BY_LEVEL,
     DEEP_LEARNING_SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL,
@@ -12,6 +16,7 @@ from app.core.placement_rubric import (
 )
 from app.services.agents.base import AgentPair, AgentValidationError
 from app.services.agents.syllabus_common import (
+    lesson_title_from_topic,
     syllabus_allowed_topics_ordered,
     syllabus_rubric_concepts_for_level,
 )
@@ -180,10 +185,7 @@ def _validate_syllabus_deterministic(payload: dict, placement_level: str | None,
         }
         if normalize_track(track) in {"deep_learning", "dl"}:
             ALLOWED_CHAPTER_NUMBERS = {
-                "beginner": {1, 2, 3, 4},
-                "intermediate": {5, 6, 7, 8},
-                "advanced": {9, 10, 11, 12},
-                "very_advanced": {13, 14, 15, 16},
+                lvl: set(nums) for lvl, nums in allowed_chapter_numbers_by_level().items()
             }
         lvl_ch = normalize_level(placement_level)
         allowed_ch = ALLOWED_CHAPTER_NUMBERS.get(lvl_ch, set())
@@ -212,12 +214,12 @@ def _validate_syllabus_deterministic(payload: dict, placement_level: str | None,
                 f"Lesson {i + 1} ({lesson.get('topic')}): "
                 "learning_objectives must be a list of at least 3 items."
             )
-        title = str(lesson.get("lesson_title") or lesson.get("title") or "").strip()
         topic = str(lesson.get("topic") or "").strip()
+        title = str(lesson.get("lesson_title") or lesson.get("title") or "").strip()
         if title.lower() == topic.lower():
-            raise AgentValidationError(
-                f"Lesson {i + 1}: lesson_title must differ from topic name."
-            )
+            fixed = lesson_title_from_topic(topic, track=track)
+            lesson["lesson_title"] = fixed
+            lesson["title"] = fixed
 
     topics = [lesson.get("topic", "") for lesson in unique_lessons]
     if "Variable Assignment" in topics and "Expressions" in topics:
@@ -277,10 +279,8 @@ class SyllabusValidatorAgent(AgentPair):
         }
         if normalize_track(track_key) in {"deep_learning", "dl"}:
             ALLOWED_CHAPTERS = {
-                "beginner": {1: "Math Foundations", 2: "Python for DL", 3: "Data Pipelines", 4: "Linear Models"},
-                "intermediate": {5: "NN Basics", 6: "Backpropagation", 7: "Optimization", 8: "Regularization"},
-                "advanced": {9: "CNN", 10: "Sequence Models", 11: "Transformers", 12: "Training Systems"},
-                "very_advanced": {13: "Generative", 14: "RL", 15: "Scaling", 16: "MLOps"},
+                level: allowed_chapters_for_level(level)
+                for level in ("beginner", "intermediate", "advanced", "very_advanced")
             }
 
         validation_input = {
@@ -295,7 +295,7 @@ class SyllabusValidatorAgent(AgentPair):
 
         try:
             source_note = (
-                "Deep Learning textbook (Goodfellow/Bengio/Courville) at https://www.deeplearningbook.org/"
+                "AI342 Deep Learning lecture materials (Dr. Rasha Obeidat, JUST)"
                 if normalize_track(track_key) in {"deep_learning", "dl"}
                 else "Python for Everybody source material"
             )

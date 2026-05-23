@@ -1,3 +1,4 @@
+from app.core.deep_learning_curriculum import DL_SOURCE_RESOURCE
 from app.services.agents.base import AgentPair
 from app.services.guardrails import sanitize_prompt
 from app.services.llm_client import LLMClient
@@ -42,7 +43,7 @@ class LessonGeneratorAgent(AgentPair):
             model=self.settings.smart_model,
             system_prompt=(
                 (
-                    "Lesson generator for Deep Learning (Ian Goodfellow, Yoshua Bengio, Aaron Courville; MIT Press). "
+                    f"Lesson generator for {DL_SOURCE_RESOURCE}. "
                     if is_dl
                     else "Lesson generator for Python for Everybody (Charles Severance, University of Michigan). "
                 )
@@ -59,7 +60,7 @@ class LessonGeneratorAgent(AgentPair):
                 "## Practice (2–3 exercises described in text); "
                 "## Summary (bullets). "
                 "For python track, cite 'Python for Everybody' at least once. "
-                "For deep_learning track, cite 'Deep Learning' at least once and ground examples in lecture-note style practice. "
+                "For deep_learning track, cite 'AI342' or 'Deep Learning lecture materials' at least once and ground examples in lecture slides. "
                 "For deep_learning track, NEVER mention 'Python for Everybody', 'PY4E', or Py4E chapter references. "
                 "Ground explanations in the provided course-text context when relevant."
             ),
@@ -77,7 +78,7 @@ class LessonGeneratorAgent(AgentPair):
                 payload["markdown"] = (
                     md.replace("Python for Everybody", "Deep Learning")
                     .replace("PY4E", "Deep Learning")
-                    .replace("py4e.com", "deeplearningbook.org")
+                    .replace("py4e.com", "AI342 lecture materials")
                 )
         return payload
 
@@ -166,7 +167,7 @@ class LessonGeneratorAgent(AgentPair):
             model=self.settings.smart_model,
             system_prompt=(
                 (
-                    "You write remedial sub-lessons for Deep Learning (Ian Goodfellow, Yoshua Bengio, Aaron Courville; MIT Press). "
+                    f"You write remedial sub-lessons for {DL_SOURCE_RESOURCE}. "
                     if is_dl
                     else "You write remedial sub-lessons for Python for Everybody (Charles Severance, University of Michigan). "
                 )
@@ -192,6 +193,6 @@ class LessonGeneratorAgent(AgentPair):
                 payload["markdown"] = (
                     md.replace("Python for Everybody", "Deep Learning")
                     .replace("PY4E", "Deep Learning")
-                    .replace("py4e.com", "deeplearningbook.org")
+                    .replace("py4e.com", "AI342 lecture materials")
                 )
         return payload

@@ -102,7 +102,8 @@ export default function DashboardQA() {
     const t = getUserCurrentTrack()
     return t === 'deep_learning' ? 'deep_learning' : 'python'
   })()
-  const sourceLabel = selectedTrack === 'deep_learning' ? 'Deep Learning' : 'Python for Everybody'
+  const sourceLabel =
+    selectedTrack === 'deep_learning' ? 'AI342 Deep Learning (JUST)' : 'Python for Everybody'
 
   // Load persisted chat on first mount
   useEffect(() => {
