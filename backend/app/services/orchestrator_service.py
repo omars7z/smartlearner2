@@ -1654,7 +1654,7 @@ class OrchestratorService:
         return {"stdout": result.stdout, "stderr": result.stderr, "return_code": result.return_code}
 
     async def _remediation_split_root_lesson(self, user_id: int, lesson) -> list[dict]:
-        """Persist 2–4 sub-lessons after a failed root-level assessment."""
+        """Persist 2–3 sub-lessons after a failed root-level assessment."""
         course = lesson.course
         if course is None:
             raise ValueError("Lesson not found")
@@ -1675,9 +1675,9 @@ class OrchestratorService:
         child_rows: list[dict] = []
         for i, (snippet, stitle) in enumerate(zip(parts, titles)):
             continuation_context = (
-                f"This is part {i + 1} of {len(parts)} in a continuous lesson sequence.\n"
-                "Teach only this slice, connect naturally with adjacent parts, and avoid duplicating full explanations "
-                "from earlier/later parts.\n"
+                f"This is part {i + 1} of {len(parts)} in a continuous lesson sequence (max 3 parts total).\n"
+                "Teach only this slice; keep it concise and dense. Connect naturally with adjacent parts without "
+                "repeating full explanations from earlier/later parts.\n"
                 f"Part title: {stitle}"
             )
             raw_sl = self.lesson_generator.generate_sub_lesson(

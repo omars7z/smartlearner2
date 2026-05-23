@@ -1,0 +1,10 @@
+# Bandit config (YAML). Use: bandit -r app -c bandit.yaml -ll
+exclude_dirs:
+  - venv
+  - .venv
+  - vector_db
+  - experiments
+  - data_pipeline
+
+skips:
+  - B101 # assert used in dev / smoke paths

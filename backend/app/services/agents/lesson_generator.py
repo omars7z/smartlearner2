@@ -132,9 +132,10 @@ class LessonGeneratorAgent(AgentPair):
             scope_bits.insert(
                 0,
                 "MULTI-PART SEQUENCE: You are writing ONE installment of a longer topic. "
-                f"This is part {pi} of {pn}. "
+                f"This is part {pi} of {pn} (the topic is split into at most 3 parts). "
                 "Each part must use different examples, different analogies, and different section headings than the other parts. "
                 "Do not restate the full topic overview from scratch as if part 1; build forward. "
+                "Keep content compressed: cover only what belongs in this slice—no padding or repeated summaries. "
                 "If this is not part 1, open with one short bridging paragraph that references that the learner already covered earlier steps.",
             )
         if continuity_instructions:
@@ -172,7 +173,11 @@ class LessonGeneratorAgent(AgentPair):
                 + "Return JSON with a single key \"markdown\" (string). "
                 "Use GitHub-flavored Markdown: ## and ### headings, **bold** terms, numbered steps, fenced ```python``` blocks. "
                 "Avoid a short recap section; instead end with a brief 'Check your understanding' (2 questions in prose, no quiz UI). "
-                "Aim for roughly 500–900 words of teaching content."
+                + (
+                    "Aim for roughly 400–650 words of teaching content (dense, no filler)."
+                    if sequence_part
+                    else "Aim for roughly 500–900 words of teaching content."
+                )
                 + seq_extra
             ),
             user_prompt=(

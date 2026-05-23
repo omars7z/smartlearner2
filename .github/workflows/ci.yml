@@ -34,12 +34,7 @@ jobs:
           pip install "bandit[toml]>=1.8.0,<2"
 
       - name: Run Bandit security scan
-        run: |
-          if [ -f .bandit ]; then
-            bandit -r app -c .bandit -ll
-          else
-            bandit -r app -ll -x venv,.venv,vector_db,experiments,data_pipeline -s B101
-          fi
+        run: bandit -r app -c bandit.yaml -ll
 
       - name: Compile Python sources
         env:

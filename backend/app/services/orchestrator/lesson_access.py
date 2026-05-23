@@ -64,9 +64,25 @@ def unit_entry_checkpoint_ids(blocks: list[_Block]) -> frozenset[int]:
     return frozenset(starters)
 
 
+_MAX_SUB_LESSON_PARTS = 3
+
+
+def _merge_into_n_parts(parts: list[str], target: int) -> list[str]:
+    """Merge many sections into exactly ``target`` balanced snippets."""
+    if len(parts) <= target:
+        return parts
+    merged: list[str] = []
+    n_src = len(parts)
+    for i in range(target):
+        start = i * n_src // target
+        end = (i + 1) * n_src // target if i < target - 1 else n_src
+        merged.append("\n\n".join(parts[start:end]))
+    return merged
+
+
 def split_markdown_into_sub_focuses(markdown: str) -> tuple[list[str], list[str]]:
     """
-    Returns (part_markdown_snippets, suggested_titles) for 2–4 sub-lessons.
+    Returns (part_markdown_snippets, suggested_titles) for 2–3 sub-lessons.
     Uses ## sections when possible; otherwise splits body into balanced chunks.
     """
     md = (markdown or "").strip()
@@ -91,23 +107,19 @@ def split_markdown_into_sub_focuses(markdown: str) -> tuple[list[str], list[str]
         paras = [p.strip() for p in md.split("\n\n") if p.strip()]
         if not paras:
             parts = [md]
+        elif len(paras) >= 4:
+            parts = _merge_into_n_parts(paras, _MAX_SUB_LESSON_PARTS)
+        elif len(paras) >= 2:
+            mid = max(1, len(paras) // 2)
+            parts = ["\n\n".join(paras[:mid]), "\n\n".join(paras[mid:])]
         else:
-            n = min(4, max(2, len(paras) // 3 + 1))
-            step = max(1, len(paras) // n)
-            for i in range(n):
-                slice_ = paras[i * step :] if i == n - 1 else paras[i * step : (i + 1) * step]
-                parts.append("\n\n".join(slice_))
+            parts = [md]
 
     n = len(parts)
     if n < 2:
         parts = [md[: max(1, len(md) // 2)], md[max(1, len(md) // 2) :]]
-    if n > 4:
-        merged: list[str] = []
-        step = (n + 3) // 4
-        for i in range(4):
-            seg = parts[i * step :] if i == 3 else parts[i * step : (i + 1) * step]
-            merged.append("\n\n".join(seg))
-        parts = merged
+    if n > _MAX_SUB_LESSON_PARTS:
+        parts = _merge_into_n_parts(parts, _MAX_SUB_LESSON_PARTS)
 
     titles: list[str] = []
     for i, p in enumerate(parts):
