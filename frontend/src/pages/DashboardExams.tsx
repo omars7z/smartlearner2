@@ -1,13 +1,18 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { Lock } from 'lucide-react'
 import { useDashboard } from '../context/DashboardContext'
 import { useToast } from '../context/ToastContext'
 import { useAccentTheme } from '../hooks/useAccentTheme'
-import { examsApi } from '../services/api'
-import type { ExamQuestionDto } from '../services/api'
-import { flattenLessonsInCourseOrder } from '../utils/syllabusOrder'
+import { examsApi, lessonsApi, type ExamQuestionDto } from '../services/api'
+import {
+  buildCompletedExamLessonOptions,
+  COMPREHENSIVE_EXAM_LESSON_ID,
+  isTrackReadyForComprehensiveExam,
+} from '../utils/examEligible'
+import { extractCourseIdFromModules } from '../utils/lessonProgressUi'
+import type { LessonProgressEntry } from '../utils/lessonProgressUi'
 
 type ExamState = 'setup' | 'generating' | 'taking' | 'results'
 
@@ -77,37 +82,103 @@ function calculateLocally(
 
 export default function DashboardExams() {
   const { accentPrimary, accentSecondary } = useAccentTheme()
-  const { placementDone, syllabusModules, setFirstExamTaken, mergeAnalyticsFromQA } = useDashboard()
+  const {
+    placementDone,
+    placementResult,
+    syllabusModules,
+    setFirstExamTaken,
+    mergeAnalyticsFromQA,
+  } = useDashboard()
   const { addToast } = useToast()
   const navigate = useNavigate()
 
   const [examState, setExamState] = useState<ExamState>('setup')
-  const [topic, setTopic] = useState('Python Lists')
-  const [level, setLevel] = useState<'beginner' | 'intermediate' | 'advanced'>('beginner')
   const [numQ, setNumQ] = useState(5)
-  const [lessonId, setLessonId] = useState('py-1-1')
+  const [selectedTarget, setSelectedTarget] = useState('')
   const [questions, setQuestions] = useState<ExamQuestionDto[]>([])
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [results, setResults] = useState<ExamResults | null>(null)
-  const [currentLessonId, setCurrentLessonId] = useState('py-1-1')
+  const [progressMap, setProgressMap] = useState<Record<string, LessonProgressEntry>>({})
+  const [progressLoading, setProgressLoading] = useState(false)
+  const [assessableProgress, setAssessableProgress] = useState({ completed: 0, total: 0 })
 
-  const lessonsFromSyllabus = useMemo(
-    () => flattenLessonsInCourseOrder(syllabusModules).map((e) => e.lesson),
-    [syllabusModules],
+  const courseId = useMemo(() => extractCourseIdFromModules(syllabusModules), [syllabusModules])
+
+  const placementLevel = useMemo(() => {
+    const raw = (placementResult?.level || 'beginner').replace(/-/g, '_').toLowerCase()
+    if (raw === 'very_advanced' || raw === 'veryadvanced') return 'very_advanced' as const
+    if (raw === 'intermediate' || raw === 'advanced' || raw === 'beginner') return raw
+    return 'beginner' as const
+  }, [placementResult?.level])
+
+  const completedLessonOptions = useMemo(
+    () => buildCompletedExamLessonOptions(syllabusModules, progressMap),
+    [syllabusModules, progressMap],
   )
 
+  const trackComprehensiveReady = useMemo(
+    () => isTrackReadyForComprehensiveExam(assessableProgress.completed, assessableProgress.total),
+    [assessableProgress],
+  )
+
+  const examSelectOptions = useMemo(() => {
+    const opts = completedLessonOptions.map((o) => ({
+      value: o.lesson_id,
+      label: `${o.label} — ${o.moduleTitle}`,
+    }))
+    if (trackComprehensiveReady) {
+      opts.push({
+        value: COMPREHENSIVE_EXAM_LESSON_ID,
+        label: '🎓 Comprehensive track exam (all completed topics)',
+      })
+    }
+    return opts
+  }, [completedLessonOptions, trackComprehensiveReady])
+
+  const refreshProgress = useCallback(async () => {
+    if (!courseId) return
+    setProgressLoading(true)
+    try {
+      const data = await lessonsApi.getProgress(courseId)
+      setProgressMap(data.lessons ?? {})
+      setAssessableProgress({
+        completed: data.completed_assessable ?? 0,
+        total: data.total_assessable ?? 0,
+      })
+    } catch {
+      setProgressMap({})
+      setAssessableProgress({ completed: 0, total: 0 })
+    } finally {
+      setProgressLoading(false)
+    }
+  }, [courseId])
+
   useEffect(() => {
-    if (!lessonsFromSyllabus.length) return
-    const firstId = lessonsFromSyllabus[0].lesson_id
-    setLessonId((prev) => (prev && lessonsFromSyllabus.some((l) => l.lesson_id === prev) ? prev : firstId))
-    setCurrentLessonId((prev) => (prev && lessonsFromSyllabus.some((l) => l.lesson_id === prev) ? prev : firstId))
-  }, [lessonsFromSyllabus])
+    void refreshProgress()
+  }, [refreshProgress, syllabusModules])
+
+  useEffect(() => {
+    if (!examSelectOptions.length) {
+      setSelectedTarget('')
+      return
+    }
+    setSelectedTarget((prev) =>
+      prev && examSelectOptions.some((o) => o.value === prev) ? prev : examSelectOptions[0].value,
+    )
+  }, [examSelectOptions])
+
+  const isComprehensiveSelected = selectedTarget === COMPREHENSIVE_EXAM_LESSON_ID
+  const canGenerate = Boolean(selectedTarget) && examSelectOptions.length > 0
 
   const generateExam = async () => {
+    if (!selectedTarget || !courseId) return
     setExamState('generating')
-    const lid = lessonsFromSyllabus.length ? lessonId : currentLessonId
     try {
-      const res = await examsApi.generate(lid, { level, question_count: numQ })
+      const res = await examsApi.generate(selectedTarget, {
+        level: placementLevel,
+        question_count: numQ,
+        course_id: courseId,
+      })
       const qs = normalizeQuestions(res)
       if (qs.length === 0) {
         addToast('error', 'No questions generated, try again')
@@ -126,7 +197,7 @@ export default function DashboardExams() {
   }
 
   const submitExam = async () => {
-    const lid = lessonsFromSyllabus.length ? lessonId : currentLessonId
+    if (!selectedTarget || !courseId) return
     try {
       const answerList = questions.map((q) => {
         const qid = q.question_id ?? q.id
@@ -134,7 +205,7 @@ export default function DashboardExams() {
         const idx = letter ? LETTERS.indexOf(letter) : 0
         return { question_id: qid, answer_index: idx >= 0 ? idx : 0 }
       })
-      const gradeRes = await examsApi.grade(lid, answerList)
+      const gradeRes = await examsApi.grade(selectedTarget, answerList, { course_id: courseId })
       const backendResults = gradeRes?.result
       let finalPct = 0
       if (backendResults?.results?.length) {
@@ -159,12 +230,14 @@ export default function DashboardExams() {
       }
       setFirstExamTaken(true)
       setExamState('results')
+      void refreshProgress()
       addToast('success', `Score: ${finalPct}%`)
     } catch (err) {
       const localResults = calculateLocally(questions, answers)
       setResults(localResults)
       setFirstExamTaken(true)
       setExamState('results')
+      void refreshProgress()
       addToast('success', `Score: ${localResults.percentage}% (saved locally)`)
     }
   }
@@ -218,50 +291,43 @@ export default function DashboardExams() {
               className="rounded-2xl p-6 border setup-card"
               style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card)' }}
             >
-              <h2 className="text-lg font-semibold text-[color:var(--text-primary)] mb-4">Generate Adaptive Exam</h2>
-              <label className="block text-sm font-medium text-[color:var(--text-secondary)] mb-1">Topic / Lesson</label>
-              {lessonsFromSyllabus.length > 0 ? (
+              <h2 className="text-lg font-semibold text-[color:var(--text-primary)] mb-2">Generate Adaptive Exam</h2>
+              <p className="text-xs text-[color:var(--text-secondary)] mb-4">
+                Only lessons you completed (quiz passed) appear here.
+                {assessableProgress.total > 0 && (
+                  <>
+                    {' '}
+                    Track progress: {assessableProgress.completed}/{assessableProgress.total} topics.
+                  </>
+                )}
+              </p>
+              <label className="block text-sm font-medium text-[color:var(--text-secondary)] mb-1">
+                Completed lesson or track exam
+              </label>
+              {progressLoading ? (
+                <p className="text-sm text-[color:var(--text-secondary)] mb-4">Loading your progress…</p>
+              ) : examSelectOptions.length > 0 ? (
                 <select
-                  value={lessonId}
-                  onChange={(e) => setLessonId(e.target.value)}
+                  value={selectedTarget}
+                  onChange={(e) => setSelectedTarget(e.target.value)}
                   className="w-full rounded-xl px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2"
                   style={{ backgroundColor: 'var(--bg-input)', color: 'var(--text-primary)' }}
                 >
-                  {lessonsFromSyllabus.map((l) => (
-                    <option key={l.lesson_id} value={l.lesson_id}>
-                      {l.title} ({l.topic})
+                  {examSelectOptions.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
                     </option>
                   ))}
                 </select>
               ) : (
-                <input
-                  value={topic}
-                  onChange={(e) => setTopic(e.target.value)}
-                  placeholder="e.g. Python Lists, Neural Networks..."
-                  className="w-full rounded-xl px-3 py-2.5 text-sm mb-4 focus:outline-none focus:ring-2"
-                  style={{ backgroundColor: 'var(--bg-input)', color: 'var(--text-primary)' }}
-                />
+                <p className="text-sm text-amber-300/90 mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                  Complete at least one lesson quiz in Lessons to unlock per-lesson exams.
+                </p>
               )}
-              <label className="block text-sm font-medium text-[color:var(--text-secondary)] mb-2">Level</label>
-              <div className="flex gap-2 mb-4 level-pills">
-                {(['beginner', 'intermediate', 'advanced'] as const).map((l) => (
-                  <button
-                    key={l}
-                    type="button"
-                    onClick={() => setLevel(l)}
-                    className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
-                      level === l ? 'active text-white' : ''
-                    }`}
-                    style={{
-                      backgroundColor: level === l ? accentPrimary : 'var(--bg-input)',
-                      color: level === l ? 'white' : 'var(--text-primary)',
-                      border: `1px solid ${level === l ? 'transparent' : 'var(--border-color)'}`,
-                    }}
-                  >
-                    {l}
-                  </button>
-                ))}
-              </div>
+              <p className="text-xs text-[color:var(--text-secondary)] mb-4">
+                Placement level: <span className="font-medium text-[color:var(--text-primary)]">{placementLevel.replace(/_/g, ' ')}</span>
+                {isComprehensiveSelected && ' · questions span the full track'}
+              </p>
               <label className="block text-sm font-medium text-[color:var(--text-secondary)] mb-1">Number of questions</label>
               <select
                 value={numQ}
@@ -276,10 +342,11 @@ export default function DashboardExams() {
               <button
                 type="button"
                 onClick={generateExam}
-                className="w-full rounded-xl py-3 font-semibold text-white gradient-btn"
+                disabled={!canGenerate || progressLoading}
+                className="w-full rounded-xl py-3 font-semibold text-white gradient-btn disabled:opacity-50"
                 style={{ background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})` }}
               >
-                Generate Exam
+                {isComprehensiveSelected ? 'Generate comprehensive exam' : 'Generate lesson exam'}
               </button>
             </motion.div>
           )}

@@ -1,4 +1,5 @@
 from app.core.config import get_settings
+from app.core.deep_learning_curriculum import DL_SOURCE_RESOURCE, DL_SOURCE_SCOPE
 from app.services.agents.base import AgentValidationError
 from app.services.guardrails import validate_content_scope
 
@@ -17,10 +18,8 @@ class LessonValidatorAgent:
             s = get_settings()
             if track_key in {"deep_learning", "dl"}:
                 suffix = (
-                    "\n\n(Source: Deep Learning (Ian Goodfellow, Yoshua Bengio, Aaron Courville; MIT Press). "
-                    "Resource: https://www.deeplearningbook.org/; "
-                    "Scope: deep learning lecture notes covering math foundations, optimization, "
-                    "regularization, and practical model training workflows.)"
+                    f"\n\n(Source: {DL_SOURCE_RESOURCE}. "
+                    f"Scope: {DL_SOURCE_SCOPE}.)"
                 )
             else:
                 suffix = (

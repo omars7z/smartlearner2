@@ -9,7 +9,7 @@ from app.schemas.contracts import ExamExecutionRequest, ExamGenerateRequest, Exa
 from app.services.agents import AgentValidationError
 from app.services.llm_client import LLMClientError
 
-from ._common import get_orchestrator, parse_lesson_id
+from ._common import get_orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +23,12 @@ async def generate_exam(
     service=Depends(get_orchestrator),
 ) -> dict:
     try:
-        lesson_id = parse_lesson_id(payload.lesson_id)
         return await service.generate_exam(
             user_id=user_id,
-            lesson_id=lesson_id,
+            lesson_id=payload.lesson_id,
             level=payload.level,
             question_count=payload.question_count,
+            course_id=payload.course_id,
         )
     except LessonLockedError:
         raise HTTPException(
@@ -40,7 +40,10 @@ async def generate_exam(
     except LLMClientError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        msg = str(exc)
+        if "complete" in msg.lower():
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=msg)
+        raise HTTPException(status_code=404, detail=msg)
     except Exception as exc:
         logger.exception("generate_exam failed user_id=%s lesson_id=%s", user_id, payload.lesson_id)
         raise HTTPException(
@@ -56,9 +59,13 @@ async def grade_exam(
     service=Depends(get_orchestrator),
 ) -> dict:
     try:
-        lesson_id = parse_lesson_id(payload.lesson_id)
         answers = [{"question_id": a.question_id, "answer_index": a.answer_index} for a in payload.answers]
-        return await service.grade_exam(user_id=user_id, lesson_id=lesson_id, answers=answers)
+        return await service.grade_exam(
+            user_id=user_id,
+            lesson_id=payload.lesson_id,
+            answers=answers,
+            course_id=payload.course_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:

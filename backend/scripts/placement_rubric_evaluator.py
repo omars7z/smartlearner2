@@ -56,7 +56,7 @@ def evaluate_placement_questions(
 
     track_key = (track or "python").strip().lower().replace("-", "_")
     source_note = (
-        "Deep Learning (Goodfellow, Bengio, Courville; MIT Press, https://www.deeplearningbook.org/)"
+        "AI342 Deep Learning lecture materials (Dr. Rasha Obeidat, JUST)"
         if track_key in {"deep_learning", "dl"}
         else "Python for Everybody (University of Michigan / Coursera)"
     )

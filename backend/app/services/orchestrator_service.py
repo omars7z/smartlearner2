@@ -62,6 +62,7 @@ def _questions_json_as_dict(raw: object) -> dict:
             return {}
     return {}
 
+from app.core.exam_constants import COMPREHENSIVE_EXAM_LESSON_ID, parse_exam_lesson_ref
 from app.services.orchestrator.common import (
     assign_question_ids as _assign_question_ids,
     duration_minutes_for_level as _duration_minutes_for_level,
@@ -69,6 +70,8 @@ from app.services.orchestrator.common import (
     is_dynamic_lesson_markdown as _is_dynamic_lesson_markdown,
     lesson_response_payload as _lesson_response_payload,
     normalized_course_level as _normalized_course_level,
+    pack_exam_questions as _pack_exam_questions,
+    unpack_exam_questions as _unpack_exam_questions,
 )
 from app.services.orchestrator.placement import (
     format_placement_question as _format_placement_question,
@@ -206,6 +209,60 @@ class OrchestratorService:
             "lessons": lesson_entries,
         }
 
+    async def _course_for_exam(self, user_id: int, course_id: int | None):
+        if course_id is not None:
+            course = await self.course_repo.get_course_with_lessons(course_id)
+            if course is None or course.user_id != user_id:
+                raise ValueError("Course not found")
+            return course
+        raise ValueError("course_id is required for this exam")
+
+    async def _ensure_lesson_completed_for_exam(self, user_id: int, course_id: int, lesson_id: int):
+        from app.services.orchestrator.lesson_access import (
+            assessable_sequence_ids,
+            block_for_lesson,
+            is_block_fully_passed,
+        )
+
+        lessons, blocks, pmap = await self._course_progression_context(user_id, course_id)
+        lesson = next((les for les in lessons if les.id == lesson_id), None)
+        if lesson is None:
+            raise ValueError("Lesson not found")
+        block = block_for_lesson(blocks, lesson_id)
+        if block and is_block_fully_passed(block, pmap):
+            return lesson
+        assessable = assessable_sequence_ids(blocks)
+        if lesson_id in assessable and pmap.get(lesson_id, False):
+            return lesson
+        raise ValueError("Complete this lesson before requesting an exam.")
+
+    async def _ensure_comprehensive_exam_eligible(self, user_id: int, course_id: int) -> tuple:
+        from app.services.orchestrator.lesson_access import assessable_sequence_ids
+
+        course = await self._course_for_exam(user_id, course_id)
+        lessons, blocks, pmap = await self._course_progression_context(user_id, course.id)
+        assessable = assessable_sequence_ids(blocks)
+        if not assessable:
+            raise ValueError("No assessable lessons in this course yet.")
+        if not all(pmap.get(aid, False) for aid in assessable):
+            raise ValueError(
+                "Complete all lessons in the track before taking the comprehensive exam."
+            )
+        return course, lessons, assessable
+
+    def _aggregate_track_markdown(self, lessons: list, *, max_chars: int = 14_000) -> str:
+        parts: list[str] = []
+        for les in sorted(lessons, key=lambda x: x.order_index):
+            md = (getattr(les, "markdown_content", None) or "").strip()
+            if not md:
+                continue
+            title = (getattr(les, "title", None) or les.topic or "Lesson").strip()
+            parts.append(f"## {title}\n\n{md}")
+        combined = "\n\n".join(parts).strip()
+        if len(combined) <= max_chars:
+            return combined
+        return combined[:max_chars] + "\n\n…"
+
     async def _sync_parent_passed_if_subs_done(self, user_id: int, parent_lesson_id: int | None) -> None:
         if not parent_lesson_id:
             return
@@ -297,7 +354,9 @@ class OrchestratorService:
         topic_text = (topic or title or "this topic").replace("_", " ").strip()
         level_text = (level or "beginner").replace("_", " ").title()
         if normalize_track(track) in {"deep_learning", "dl"}:
-            source_line = "Deep Learning (Goodfellow, Bengio, Courville) and lesson context."
+            from app.core.deep_learning_curriculum import DL_SOURCE_RESOURCE
+
+            source_line = f"{DL_SOURCE_RESOURCE} and lesson context."
             example = (
                 "```python\n"
                 "import numpy as np\n\n"
@@ -1386,35 +1445,70 @@ class OrchestratorService:
     async def generate_exam(
         self,
         user_id: int,
-        lesson_id: int,
+        lesson_id: str,
         level: str = "beginner",
         question_count: int = 5,
+        course_id: int | None = None,
     ) -> dict:
         if question_count not in {3, 5, 10}:
             raise ValueError("question_count must be 3, 5, or 10")
 
-        lesson = await self.course_repo.get_lesson_with_course(lesson_id)
-        if lesson is None:
-            raise ValueError("Lesson not found")
-        if lesson.course is None or lesson.course.user_id != user_id:
-            raise ValueError("Lesson not found")
+        exam_kind, numeric_lesson_id = parse_exam_lesson_ref(lesson_id)
+        is_comprehensive = exam_kind == "comprehensive"
+        response_lesson_id = lesson_id.strip()
 
-        course = lesson.course
-        course_level = _normalized_course_level(course.level)
-        track = self._track_from_lesson_context(lesson, course)
+        if is_comprehensive:
+            course, lessons, assessable = await self._ensure_comprehensive_exam_eligible(
+                user_id, course_id
+            )
+            storage_lesson_id = assessable[-1]
+            lesson = await self.course_repo.get_lesson_with_course(storage_lesson_id)
+            if lesson is None:
+                raise ValueError("Lesson not found")
+            lesson_title = "Comprehensive Track Exam"
+            topic = "track_comprehensive"
+            track = self._track_from_lesson_context(lesson, course)
+            course_level = _normalized_course_level(course.level)
+            markdown = self._aggregate_track_markdown(lessons)
+            if not markdown.strip():
+                markdown = self._fallback_lesson_markdown(
+                    title=lesson_title,
+                    topic=topic,
+                    track=track,
+                    level=course_level,
+                )
+        else:
+            assert numeric_lesson_id is not None
+            lesson = await self.course_repo.get_lesson_with_course(numeric_lesson_id)
+            if lesson is None:
+                raise ValueError("Lesson not found")
+            if lesson.course is None or lesson.course.user_id != user_id:
+                raise ValueError("Lesson not found")
+            await self._ensure_lesson_completed_for_exam(
+                user_id, lesson.course_id, lesson.id
+            )
+            course = lesson.course
+            storage_lesson_id = lesson.id
+            lesson_title = lesson.title
+            topic = lesson.topic
+            track = self._track_from_lesson_context(lesson, course)
+            course_level = _normalized_course_level(course.level)
+            response_lesson_id = f"lesson_{lesson.id}"
+            markdown = (lesson.markdown_content or "").strip()
+            if not markdown:
+                markdown = self._fallback_lesson_markdown(
+                    title=lesson.title,
+                    topic=lesson.topic,
+                    track=track,
+                    level=course_level,
+                )
+
         weak_topics, strong_topics = await self._latest_placement_topics(user_id, track)
 
-        markdown = (lesson.markdown_content or "").strip()
-        if not markdown:
-            markdown = self._fallback_lesson_markdown(
-                title=lesson.title,
-                topic=lesson.topic,
-                track=track,
-                level=course_level,
-            )
-
-        progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
-        prior = progress.current_questions_json if isinstance(progress.current_questions_json, list) else []
+        progress = await self.lesson_progress_repo.get_or_create(
+            user_id=user_id, lesson_id=storage_lesson_id
+        )
+        prior = _unpack_exam_questions(progress.current_questions_json)
         previous_stems = [
             str(q.get("question") or "").strip()
             for q in prior
@@ -1423,11 +1517,12 @@ class OrchestratorService:
         attempt_number = max(1, int(progress.attempts or 0) + 1)
 
         exam_input = {
-            "lesson_id": lesson_id,
+            "lesson_id": response_lesson_id,
             "level": level,
             "question_count": question_count,
-            "topic": lesson.topic,
+            "topic": topic,
             "track": track,
+            "exam_scope": "comprehensive" if is_comprehensive else "lesson",
         }
         generated: dict | None = None
         used_llm = True
@@ -1435,8 +1530,8 @@ class OrchestratorService:
         for attempt in range(3):
             try:
                 raw = self.exam_generator.generate(
-                    lesson_title=lesson.title,
-                    topic=lesson.topic,
+                    lesson_title=lesson_title,
+                    topic=topic,
                     track=track,
                     level=level,
                     question_count=question_count,
@@ -1450,9 +1545,9 @@ class OrchestratorService:
                 last_exc = exc
                 used_llm = False
                 raw = self.exam_generator._fallback_questions(
-                    topic=lesson.topic,
+                    topic=topic,
                     level=level,
-                    lesson_title=lesson.title,
+                    lesson_title=lesson_title,
                     question_count=question_count,
                     attempt_number=attempt_number + attempt,
                     previous_stems=previous_stems,
@@ -1495,9 +1590,9 @@ class OrchestratorService:
         if not generated:
             used_llm = False
             raw = self.exam_generator._fallback_questions(
-                topic=lesson.topic,
+                topic=topic,
                 level=level,
-                lesson_title=lesson.title,
+                lesson_title=lesson_title,
                 question_count=question_count,
                 attempt_number=attempt_number + 3,
                 previous_stems=previous_stems,
@@ -1514,7 +1609,9 @@ class OrchestratorService:
             )
 
         stored = _assign_question_ids(list(generated.get("questions") or []))
-        progress.current_questions_json = stored
+        progress.current_questions_json = _pack_exam_questions(
+            stored, comprehensive=is_comprehensive
+        )
         progress.attempts = attempt_number
         await self.lesson_progress_repo.save(progress)
 
@@ -1524,23 +1621,50 @@ class OrchestratorService:
             "intent": "exam_generation",
             "result": {
                 "status": "generated",
-                "lesson_id": f"lesson_{lesson.id}",
+                "lesson_id": response_lesson_id,
+                "exam_scope": "comprehensive" if is_comprehensive else "lesson",
                 "questions": frontend_questions,
                 "llm_used": used_llm,
                 "attempt_number": attempt_number,
             },
         }
 
-    async def grade_exam(self, user_id: int, lesson_id: int, answers: list[dict]) -> dict:
-        lesson = await self.course_repo.get_lesson_with_course(lesson_id)
-        if lesson is None:
-            raise ValueError("Lesson not found")
-        if lesson.course is None or lesson.course.user_id != user_id:
-            raise ValueError("Lesson not found")
+    async def grade_exam(
+        self,
+        user_id: int,
+        lesson_id: str,
+        answers: list[dict],
+        course_id: int | None = None,
+    ) -> dict:
+        exam_kind, numeric_lesson_id = parse_exam_lesson_ref(lesson_id)
+        is_comprehensive = exam_kind == "comprehensive"
+        response_lesson_id = lesson_id.strip()
 
-        progress = await self.lesson_progress_repo.get_or_create(user_id=user_id, lesson_id=lesson.id)
-        questions = progress.current_questions_json or []
-        if not isinstance(questions, list) or not questions:
+        if is_comprehensive:
+            course, _lessons, assessable = await self._ensure_comprehensive_exam_eligible(
+                user_id, course_id
+            )
+            storage_lesson_id = assessable[-1]
+            lesson = await self.course_repo.get_lesson_with_course(storage_lesson_id)
+            if lesson is None:
+                raise ValueError("Lesson not found")
+            analytics_topic = "track_comprehensive"
+        else:
+            assert numeric_lesson_id is not None
+            lesson = await self.course_repo.get_lesson_with_course(numeric_lesson_id)
+            if lesson is None:
+                raise ValueError("Lesson not found")
+            if lesson.course is None or lesson.course.user_id != user_id:
+                raise ValueError("Lesson not found")
+            storage_lesson_id = lesson.id
+            response_lesson_id = f"lesson_{lesson.id}"
+            analytics_topic = lesson.topic
+
+        progress = await self.lesson_progress_repo.get_or_create(
+            user_id=user_id, lesson_id=storage_lesson_id
+        )
+        questions = _unpack_exam_questions(progress.current_questions_json)
+        if not questions:
             raise ValueError("No active exam session for this lesson. Generate an exam first.")
 
         answer_map: dict[str, int] = {}
@@ -1602,7 +1726,7 @@ class OrchestratorService:
             self.agent_repo,
             agent_name="exam-grader",
             stage="grade",
-            input_json={"lesson_id": lesson_id, "answer_count": len(answers)},
+            input_json={"lesson_id": response_lesson_id, "answer_count": len(answers)},
             output_json={
                 "score": score,
                 "total": total,
@@ -1622,7 +1746,7 @@ class OrchestratorService:
                 current_event={
                     "type": "exam",
                     "payload": {
-                        "topic": lesson.topic,
+                        "topic": analytics_topic,
                         "questions": exam_analytics_questions,
                     },
                 },
@@ -1632,7 +1756,8 @@ class OrchestratorService:
 
         result_payload: dict = {
             "status": "graded",
-            "lesson_id": f"lesson_{lesson.id}",
+            "lesson_id": response_lesson_id,
+            "exam_scope": "comprehensive" if is_comprehensive else "lesson",
             "score": score,
             "total": total,
             "overall_score": overall_score,

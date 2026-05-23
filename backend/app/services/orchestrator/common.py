@@ -1,3 +1,4 @@
+from app.core.exam_constants import COMPREHENSIVE_EXAM_LESSON_ID
 from app.core.placement_rubric import normalize_level
 
 
@@ -32,6 +33,24 @@ def assign_question_ids(questions: list[dict]) -> list[dict]:
     for i, q in enumerate(questions):
         q["id"] = f"q{i}"
     return questions
+
+
+def pack_exam_questions(questions: list[dict], *, comprehensive: bool = False) -> list:
+    if comprehensive:
+        return [{"_exam_scope": COMPREHENSIVE_EXAM_LESSON_ID, "_questions": questions}]
+    return questions
+
+
+def unpack_exam_questions(payload: object) -> list[dict]:
+    if not isinstance(payload, list):
+        return []
+    for item in payload:
+        if isinstance(item, dict) and item.get("_exam_scope") == COMPREHENSIVE_EXAM_LESSON_ID:
+            nested = item.get("_questions")
+            if isinstance(nested, list):
+                return [q for q in nested if isinstance(q, dict)]
+            return []
+    return [q for q in payload if isinstance(q, dict) and not q.get("_exam_scope")]
 
 
 def lesson_response_payload(

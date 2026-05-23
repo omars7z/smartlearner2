@@ -509,19 +509,29 @@ export interface ExamGradeEnvelope {
 export const examsApi = {
   async generate(
     lessonId: string,
-    opts?: { level?: 'beginner' | 'intermediate' | 'advanced'; question_count?: number },
+    opts?: {
+      level?: 'beginner' | 'intermediate' | 'advanced' | 'very_advanced'
+      question_count?: number
+      course_id?: number
+    },
   ) {
     const res = await api.post<ExamGenerateEnvelope>('/exams/generate', {
       lesson_id: lessonId,
       level: opts?.level ?? 'beginner',
       question_count: opts?.question_count ?? 5,
+      course_id: opts?.course_id,
     }, { timeout: 120_000 })
     return res.data
   },
-  async grade(lessonId: string, answers: { question_id: string; answer_index: number }[]) {
+  async grade(
+    lessonId: string,
+    answers: { question_id: string; answer_index: number }[],
+    opts?: { course_id?: number },
+  ) {
     const res = await api.post<ExamGradeEnvelope>('/exams/grade', {
       lesson_id: lessonId,
       answers,
+      course_id: opts?.course_id,
     })
     return res.data
   },

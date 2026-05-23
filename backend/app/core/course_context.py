@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 
 from app.core.config import get_settings
 from app.core.placement_rubric import (
+    DEEP_LEARNING_PLACEMENT_CONCEPTS_BY_LEVEL,
+    DEEP_LEARNING_SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL,
+    DEEP_LEARNING_SYLLABUS_TOPIC_ORDER_BY_LEVEL,
     PLACEMENT_CONCEPTS_BY_LEVEL,
     SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL,
     SYLLABUS_TOPIC_ORDER_BY_LEVEL,
@@ -11,6 +14,7 @@ from app.core.placement_rubric import (
     concepts_for_level,
     normalize_level,
 )
+from app.core.deep_learning_curriculum import DL_SOURCE_RESOURCE, DL_SOURCE_SCOPE
 
 
 @dataclass(frozen=True)
@@ -138,6 +142,33 @@ def course_context_for_track(track: str | None = None, course_title: str | None 
             syllabus_rubric_by_level={k: tuple(v) for k, v in SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL.items()},
             forbidden_topics=("content outside the PY4E level scope",),
             is_python_default=True,
+        )
+
+    if normalized in {"deep_learning", "dl"}:
+        return CourseContext(
+            track="deep_learning",
+            course_title=title or "Deep Learning (AI342)",
+            subject="Deep learning",
+            source_resource=DL_SOURCE_RESOURCE,
+            source_scope=DL_SOURCE_SCOPE,
+            placement_concepts_by_level={
+                k: tuple(v) for k, v in DEEP_LEARNING_PLACEMENT_CONCEPTS_BY_LEVEL.items()
+            },
+            syllabus_topics_by_level={
+                k: tuple(v) for k, v in DEEP_LEARNING_SYLLABUS_TOPIC_ORDER_BY_LEVEL.items()
+            },
+            syllabus_rubric_by_level={
+                k: tuple(v) for k, v in DEEP_LEARNING_SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL.items()
+            },
+            forbidden_topics=(
+                "Python for Everybody",
+                "PY4E",
+                "py4e.com",
+                "transformers",
+                "diffusion models",
+                "reinforcement learning",
+            ),
+            is_python_default=False,
         )
 
     display = title or raw_track.replace("_", " ").title()

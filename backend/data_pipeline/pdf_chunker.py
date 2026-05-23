@@ -14,6 +14,11 @@ from typing import Any, Dict, List
 import json
 import pickle
 import re
+import sys
+
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
 
 import numpy as np
 from pypdf import PdfReader
@@ -196,48 +201,7 @@ class BookChunker:
     "deep_learning_lectures": {
       "track": "Deep Learning",
       "folder": "data/books/deep_learning",
-      "chapters": {
-        "dl_01_math": {
-          "title": "Math Foundations",
-          "difficulty": "beginner",
-          "topics": ["vectors", "matrices", "calculus"],
-        },
-        "dl_02_python": {
-          "title": "Python for Deep Learning",
-          "difficulty": "beginner",
-          "topics": ["numpy", "tensor_ops"],
-        },
-        "dl_03_data": {
-          "title": "Data Pipelines and Splits",
-          "difficulty": "beginner",
-          "topics": ["datasets", "data_splits", "leakage"],
-        },
-        "dl_04_linear_models": {
-          "title": "Linear and Logistic Models",
-          "difficulty": "beginner",
-          "topics": ["linear_regression", "logistic_regression", "losses"],
-        },
-        "dl_05_nn_basics": {
-          "title": "Neural Network Fundamentals",
-          "difficulty": "intermediate",
-          "topics": ["mlp", "activations", "forward_pass"],
-        },
-        "dl_06_backprop": {
-          "title": "Backpropagation",
-          "difficulty": "intermediate",
-          "topics": ["chain_rule", "gradients", "backward_pass"],
-        },
-        "dl_07_optimization": {
-          "title": "Optimization",
-          "difficulty": "intermediate",
-          "topics": ["sgd", "adam", "learning_rate"],
-        },
-        "dl_08_regularization": {
-          "title": "Generalization and Regularization",
-          "difficulty": "intermediate",
-          "topics": ["dropout", "batch_norm", "early_stopping"],
-        },
-      },
+      "chapters": {},
     },
   }
 
@@ -340,6 +304,13 @@ class BookChunker:
         chapters_cfg = book_chunker_chapter_config()
       except ImportError:
         pass
+    elif book_key == "deep_learning_lectures":
+      try:
+        from app.core.deep_learning_curriculum import book_chunker_chapter_config
+
+        chapters_cfg = book_chunker_chapter_config()
+      except ImportError:
+        pass
     folder = Path(config["folder"])
     total_chunks = 0
 
@@ -359,10 +330,13 @@ class BookChunker:
       # Detect chapter info from filename
       chapter_key = None
       stem_lower = file_path.stem.lower()
-      for key in chapters_cfg:
-        if key in stem_lower:
-          chapter_key = key
-          break
+      if stem_lower in chapters_cfg:
+        chapter_key = stem_lower
+      else:
+        for key in chapters_cfg:
+          if key in stem_lower:
+            chapter_key = key
+            break
 
       if chapter_key:
         ch_info = chapters_cfg[chapter_key]
@@ -395,6 +369,13 @@ class BookChunker:
         if book_key == "python_py4e" and chapter_key:
           try:
             from app.core.py4e_curriculum import sub_lessons_for_chapter
+
+            sub_lessons = sub_lessons_for_chapter(chapter_key)
+          except ImportError:
+            sub_lessons = None
+        elif book_key == "deep_learning_lectures" and chapter_key:
+          try:
+            from app.core.deep_learning_curriculum import sub_lessons_for_chapter
 
             sub_lessons = sub_lessons_for_chapter(chapter_key)
           except ImportError:
@@ -493,6 +474,8 @@ class BookChunker:
 
 def main() -> None:
   chunker = BookChunker()
+  backend_root = Path(__file__).resolve().parents[1]
+  vector_out = backend_root / "vector_db"
 
   total = 0
   for book_key in ["python_py4e", "deep_learning_lectures"]:
@@ -506,7 +489,7 @@ def main() -> None:
     return
 
   chunker.build_faiss_index()
-  chunker.save(output_dir="backend/vector_db")
+  chunker.save(output_dir=str(vector_out))
   chunker.print_summary()
   print("\nVector DB saved! Restart the server to use new data.")
 

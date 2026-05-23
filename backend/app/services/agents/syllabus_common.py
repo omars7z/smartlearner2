@@ -1,5 +1,6 @@
 """Shared syllabus topic ordering and chapter hints for generator and validator."""
 
+from app.core.deep_learning_curriculum import DL_CHAPTERS_BY_LEVEL, DL_CHAPTER_TITLES
 from app.core.placement_rubric import (
     DEEP_LEARNING_PLACEMENT_CONCEPTS_BY_LEVEL,
     DEEP_LEARNING_SYLLABUS_RUBRIC_CONCEPTS_BY_LEVEL,
@@ -32,6 +33,16 @@ def syllabus_allowed_topics_ordered(level: str, track: str = "python") -> list[s
     return sorted(allow)
 
 
+def lesson_title_from_topic(topic: str, *, track: str = "python") -> str:
+    """Human-readable title that must differ from the exact topic string (validator rule)."""
+    t = (topic or "").strip()
+    if not t:
+        return "Lesson overview"
+    if normalize_track(track) in {"deep_learning", "dl"}:
+        return f"Applied practice: {t}"
+    return f"Hands-on: {t}"
+
+
 def syllabus_rubric_concepts_for_level(level: str, track: str = "python") -> list[str]:
     lvl = normalize_level(level)
     if normalize_track(track) in {"deep_learning", "dl"}:
@@ -46,34 +57,13 @@ def syllabus_rubric_concepts_for_level(level: str, track: str = "python") -> lis
 def chapter_structure_hint(level: str, track: str = "python") -> str:
     """Track chapter breakdown injected into syllabus prompt."""
     norm_track = (track or "python").strip().lower().replace("-", "_")
-    if norm_track == "deep_learning":
-        hints = {
-            "beginner": (
-                "Module 1 – Math Foundations: vectors, matrices, derivatives\n"
-                "Module 2 – Python for DL: NumPy and tensor ops\n"
-                "Module 3 – Data Pipelines: dataset splits and leakage prevention\n"
-                "Module 4 – Linear Baselines: linear/logistic models and losses"
-            ),
-            "intermediate": (
-                "Module 5 – NN Basics: MLP blocks and activations\n"
-                "Module 6 – Backpropagation: chain rule and gradient flow\n"
-                "Module 7 – Optimization: SGD/Adam and LR schedules\n"
-                "Module 8 – Generalization: regularization, batch norm, early stopping"
-            ),
-            "advanced": (
-                "Module 9 – CNNs: convolution, pooling, architecture choices\n"
-                "Module 10 – Sequence Models: RNN/LSTM basics and limitations\n"
-                "Module 11 – Transformers: attention and encoder-decoder design\n"
-                "Module 12 – Training Systems: mixed precision and distributed training"
-            ),
-            "very_advanced": (
-                "Module 13 – Generative Models: VAEs and diffusion\n"
-                "Module 14 – Reinforcement Learning: policy methods\n"
-                "Module 15 – Scaling: large-model training pipelines\n"
-                "Module 16 – MLOps: serving, monitoring, drift handling"
-            ),
-        }
-        return hints.get(normalize_level(level), hints["beginner"])
+    if norm_track in {"deep_learning", "dl"}:
+        lvl = normalize_level(level)
+        lines = [
+            f"Ch {n} – {DL_CHAPTER_TITLES[n]}"
+            for n in DL_CHAPTERS_BY_LEVEL.get(lvl, DL_CHAPTERS_BY_LEVEL["beginner"])
+        ]
+        return "\n".join(lines)
 
     hints = {
         "beginner": (
