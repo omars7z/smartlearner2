@@ -1,4 +1,4 @@
-import type { LessonDto, ModuleDto } from '../services/api'
+import type { ModuleDto } from '../services/api'
 import { flattenLessonsInCourseOrder } from './syllabusOrder'
 import { isQuizCheckpoint, resolveLessonUiStatus, type LessonProgressEntry } from './lessonProgressUi'
 
