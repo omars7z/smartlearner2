@@ -8,3 +8,4 @@ exclude_dirs:
 
 skips:
   - B101 # assert used in dev / smoke paths
+  - B301 # trusted local chunks.pkl from our RAG pipeline
