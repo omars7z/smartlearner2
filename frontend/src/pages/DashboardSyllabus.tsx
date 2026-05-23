@@ -5,8 +5,9 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useDashboard } from '../context/DashboardContext'
 import { useToast } from '../context/ToastContext'
 import { useAccentTheme } from '../hooks/useAccentTheme'
-import { curriculumApi, syllabusApi } from '../services/api'
+import { axiosErrorDetail, curriculumApi, syllabusApi } from '../services/api'
 import type { ModuleDto, Py4eCurriculumPayload } from '../services/api'
+import { getUserPlacementResult } from '../utils/dashboardStorage'
 
 function normalizeSyllabus(data: unknown): { track: string; total_modules: number; estimated_weeks: number; modules: ModuleDto[] } {
   const raw = (data as { syllabus?: unknown; modules?: ModuleDto[] })?.syllabus ?? (data as { modules?: ModuleDto[] })?.modules ?? data
@@ -59,14 +60,7 @@ export default function DashboardSyllabus() {
   }, [fullPlacementResult, hasSyllabus])
 
   const handleGenerate = async () => {
-    const placement = fullPlacementResult ?? (() => {
-      try {
-        const s = localStorage.getItem('placement_result')
-        return s ? JSON.parse(s) : null
-      } catch {
-        return null
-      }
-    })()
+    const placement = fullPlacementResult ?? getUserPlacementResult()
     if (!placement || !placementId) {
       addToast('error', 'Complete the placement test first.')
       navigate('/dashboard/placement')
@@ -97,9 +91,8 @@ export default function DashboardSyllabus() {
         addToast('error', msg)
       }
     } catch (err) {
-      const anyErr = err as any
-      const apiMsg = anyErr?.response?.data?.error
-      const msg = apiMsg ? `Generation failed: ${String(apiMsg)}` : 'Failed to generate. Please try again.'
+      const apiMsg = axiosErrorDetail(err)
+      const msg = apiMsg ? `Generation failed: ${apiMsg}` : 'Failed to generate. Please try again.'
       setLastError(msg)
       addToast('error', msg)
     } finally {
@@ -340,7 +333,10 @@ export default function DashboardSyllabus() {
                                       className="flex items-center justify-between gap-2 text-xs text-[color:var(--text-secondary)]"
                                     >
                                       <span className="min-w-0 truncate">
-                                        <span className="text-sky-400 font-medium">Part {si + 1}</span>{' '}
+                                        <span className="text-sky-400 font-medium">Part {si + 1}</span>
+                                        {sub.is_final_sub_lesson ? (
+                                          <span className="text-emerald-300/90 font-medium"> · quiz</span>
+                                        ) : null}{' '}
                                         {sub.title}
                                       </span>
                                       <button

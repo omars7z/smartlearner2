@@ -23,6 +23,7 @@ import { useTheme } from '../context/ThemeContext'
 import { useAccentTheme } from '../hooks/useAccentTheme'
 import { useDashboard } from '../context/DashboardContext'
 import { getStoredUser, isStoredUserAdmin } from '../utils/currentUser'
+import { clearLegacyUserScopedStorage } from '../utils/dashboardStorage'
 import GroqRateLimitBanner from './GroqRateLimitBanner'
 
 const STEPPER_STEPS = [
@@ -73,6 +74,7 @@ export default function DashboardLayout() {
   const visibleNavItems = NAV_ITEMS.filter((i) => (i.to === '/dashboard/resources' ? isAdmin : true))
 
   const handleLogout = () => {
+    clearLegacyUserScopedStorage()
     localStorage.removeItem('smartlearner-current-user')
     localStorage.removeItem('smartlearner_token')
     navigate('/')

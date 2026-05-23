@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flattenLessonsInCourseOrder, normalizeSyllabusModules } from '../utils/syllabusOrder'
 import { useLocation, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { BookOpen, ChevronDown, ChevronRight, ClipboardCheck } from 'lucide-react'
+import { AlertCircle, BookOpen, CheckCircle2, ChevronDown, ChevronRight, ClipboardCheck, Lock } from 'lucide-react'
 import { useDashboard } from '../context/DashboardContext'
+import { useToast } from '../context/ToastContext'
 import { useAccentTheme } from '../hooks/useAccentTheme'
 import {
   lessonsApi,
@@ -15,6 +16,26 @@ import {
   type LessonSection,
   type QuickAssessmentQuestionDto,
 } from '../services/api'
+import {
+  extractCourseIdFromModules,
+  moduleProgressStats,
+  resolveLessonUiStatus,
+  type LessonProgressEntry,
+  type LessonUiStatus,
+} from '../utils/lessonProgressUi'
+
+function LessonStatusIcon({ status }: { status: LessonUiStatus }) {
+  if (status === 'completed') {
+    return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" aria-hidden />
+  }
+  if (status === 'locked') {
+    return <Lock className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden />
+  }
+  if (status === 'failed') {
+    return <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden />
+  }
+  return <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-slate-500/60" aria-hidden />
+}
 
 export default function DashboardLessons() {
   const { accentPrimary, accentSecondary } = useAccentTheme()
@@ -27,6 +48,7 @@ export default function DashboardLessons() {
     mergeAnalyticsFromQA,
     setSyllabusModules,
   } = useDashboard()
+  const { addToast } = useToast()
   const navigate = useNavigate()
   const location = useLocation()
   const stateLesson = (location.state as { lesson?: LessonDto })?.lesson
@@ -48,7 +70,43 @@ export default function DashboardLessons() {
   const [resultModalMessage, setResultModalMessage] = useState('')
   const [resultModalNextLesson, setResultModalNextLesson] = useState<LessonDto | null>(null)
   const [lessonLockMessage, setLessonLockMessage] = useState<string | null>(null)
+  const [progressMap, setProgressMap] = useState<Record<string, LessonProgressEntry>>({})
+  const [progressSummary, setProgressSummary] = useState({ completed: 0, total: 0, percent: 0 })
   const lessonTopRef = useRef<HTMLDivElement | null>(null)
+
+  const courseId = useMemo(() => extractCourseIdFromModules(syllabusModules), [syllabusModules])
+
+  const refreshProgress = useCallback(async () => {
+    if (!courseId) {
+      setProgressMap({})
+      setProgressSummary({ completed: 0, total: 0, percent: 0 })
+      return
+    }
+    try {
+      const data = await lessonsApi.getProgress(courseId)
+      setProgressMap(data.lessons ?? {})
+      setProgressSummary({
+        completed: data.completed_assessable ?? 0,
+        total: data.total_assessable ?? 0,
+        percent: data.overall_percent ?? 0,
+      })
+    } catch {
+      /* keep last snapshot */
+    }
+  }, [courseId])
+
+  const selectLesson = useCallback(
+    (lesson: LessonDto) => {
+      const status = resolveLessonUiStatus(lesson, progressMap)
+      if (status === 'locked') {
+        addToast('error', 'Complete the previous lesson quiz to unlock this one.')
+        return
+      }
+      setSelectedLesson(lesson)
+      setCurrentLesson(lesson)
+    },
+    [addToast, progressMap, setCurrentLesson],
+  )
 
   const syllabusOrdered = useMemo(() => normalizeSyllabusModules(syllabusModules), [syllabusModules])
   const orderedFlatLessons = useMemo(() => flattenLessonsInCourseOrder(syllabusModules), [syllabusModules])
@@ -74,6 +132,10 @@ export default function DashboardLessons() {
   useEffect(() => {
     if (resolvedTopic) setCurrentTopic(resolvedTopic)
   }, [resolvedTopic, setCurrentTopic])
+
+  useEffect(() => {
+    void refreshProgress()
+  }, [refreshProgress, syllabusModules])
 
   useEffect(() => {
     if (!displayLesson) {
@@ -279,7 +341,23 @@ export default function DashboardLessons() {
         className="w-64 shrink-0 border-r overflow-y-auto p-4"
         style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card)' }}
       >
-        <h2 className="text-sm font-semibold text-[color:var(--text-primary)] mb-3">Lessons</h2>
+        <h2 className="text-sm font-semibold text-[color:var(--text-primary)] mb-2">Lessons</h2>
+        {hasSyllabus && progressSummary.total > 0 ? (
+          <div className="mb-4">
+            <div className="flex items-center justify-between text-[10px] text-[color:var(--text-muted)] mb-1">
+              <span>Course progress</span>
+              <span>
+                {progressSummary.completed}/{progressSummary.total}
+              </span>
+            </div>
+            <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                style={{ width: `${Math.min(100, progressSummary.percent)}%` }}
+              />
+            </div>
+          </div>
+        ) : null}
         {!hasSyllabus ? (
           <p className="text-xs text-[color:var(--text-muted)]">
             Generate your syllabus first to see lessons.
@@ -288,25 +366,50 @@ export default function DashboardLessons() {
           <p className="text-xs text-[color:var(--text-muted)]">No lessons in syllabus.</p>
         ) : (
           <div className="space-y-4">
-            {syllabusOrdered.map((mod) => (
+            {syllabusOrdered.map((mod) => {
+              const modStats = moduleProgressStats(mod, progressMap)
+              return (
               <div key={mod.module_id}>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-[color:var(--text-muted)] mb-2">
-                  {mod.title}
-                </p>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[color:var(--text-muted)] truncate">
+                    {mod.title}
+                  </p>
+                  {modStats.total > 0 ? (
+                    <span className="text-[10px] text-emerald-400/90 shrink-0">
+                      {modStats.done}/{modStats.total}
+                    </span>
+                  ) : null}
+                </div>
+                {modStats.total > 0 ? (
+                  <div className="h-1 rounded-full bg-white/5 overflow-hidden mb-2">
+                    <div
+                      className="h-full rounded-full bg-emerald-500/70"
+                      style={{ width: `${Math.round((modStats.done / modStats.total) * 100)}%` }}
+                    />
+                  </div>
+                ) : null}
                 <ul className="space-y-1">
                   {(mod.lessons || []).map((lesson) => {
                     const subActive = lesson.sub_lessons?.some((s) => s.lesson_id === displayLesson?.lesson_id)
                     const active = displayLesson?.lesson_id === lesson.lesson_id || subActive
+                    const rootStatus = resolveLessonUiStatus(lesson, progressMap)
+                    const rootLocked = rootStatus === 'locked'
                     return (
                       <li key={lesson.lesson_id}>
                         <button
                           type="button"
-                          onClick={() => {
-                            setSelectedLesson(lesson)
-                            setCurrentLesson(lesson)
-                          }}
-                          className={`w-full text-left rounded-lg px-3 py-2 text-xs transition-colors ${
-                            active ? 'text-white' : 'text-[color:var(--text-secondary)] hover:bg-white/10'
+                          onClick={() => selectLesson(lesson)}
+                          disabled={rootLocked}
+                          className={`w-full text-left rounded-lg px-3 py-2 text-xs transition-colors flex items-start gap-2 ${
+                            active
+                              ? 'text-white'
+                              : rootStatus === 'completed'
+                                ? 'text-emerald-200/90 bg-emerald-500/10 border border-emerald-500/20'
+                                : rootStatus === 'failed'
+                                  ? 'text-amber-200/90 bg-amber-500/10 border border-amber-500/20'
+                                  : rootLocked
+                                    ? 'text-slate-500 cursor-not-allowed opacity-70'
+                                    : 'text-[color:var(--text-secondary)] hover:bg-white/10 border border-transparent'
                           }`}
                           style={
                             active
@@ -316,38 +419,54 @@ export default function DashboardLessons() {
                               : undefined
                           }
                         >
-                          <span className="font-medium leading-snug block truncate" title={lesson.title}>
-                            {lesson.title}
-                          </span>
-                          {lesson.sub_lessons?.length ? (
-                            <span className="text-[10px] opacity-80 mt-0.5 block">
-                              {lesson.sub_lessons.length} parts
+                          <LessonStatusIcon status={rootStatus} />
+                          <span className="min-w-0 flex-1">
+                            <span className="font-medium leading-snug block truncate" title={lesson.title}>
+                              {lesson.title}
                             </span>
-                          ) : null}
+                            {lesson.sub_lessons?.length ? (
+                              <span className="text-[10px] opacity-80 mt-0.5 block">
+                                {lesson.sub_lessons.length} parts
+                              </span>
+                            ) : null}
+                          </span>
                         </button>
                         {lesson.sub_lessons?.length ? (
                           <ul className="mt-1 ml-2 space-y-0.5 border-l border-white/10 pl-2">
-                            {lesson.sub_lessons.map((sub, si) => (
+                            {lesson.sub_lessons.map((sub, si) => {
+                              const subStatus = resolveLessonUiStatus(sub, progressMap)
+                              const subLocked = subStatus === 'locked'
+                              return (
                               <li key={sub.lesson_id}>
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setSelectedLesson(sub)
-                                    setCurrentLesson(sub)
-                                  }}
-                                  className={`w-full text-left rounded-md px-2 py-1.5 text-[11px] transition-colors ${
+                                  onClick={() => selectLesson(sub)}
+                                  disabled={subLocked}
+                                  className={`w-full text-left rounded-md px-2 py-1.5 text-[11px] transition-colors flex items-start gap-1.5 ${
                                     displayLesson?.lesson_id === sub.lesson_id
                                       ? 'text-sky-200 bg-white/10'
-                                      : 'text-[color:var(--text-muted)] hover:bg-white/5'
+                                      : subStatus === 'completed'
+                                        ? 'text-emerald-300/90 bg-emerald-500/10'
+                                        : subStatus === 'failed'
+                                          ? 'text-amber-300/90 bg-amber-500/10'
+                                          : subLocked
+                                            ? 'text-slate-600 cursor-not-allowed opacity-70'
+                                            : 'text-[color:var(--text-muted)] hover:bg-white/5'
                                   }`}
                                 >
-                                  <span className="text-sky-400/90 font-medium">Part {si + 1}</span>
-                                  <span className="block truncate opacity-90" title={sub.title}>
-                                    {sub.title.replace(/^\(part\s+\d+\/\d+\)\s*/i, '').trim() || sub.title}
+                                  <LessonStatusIcon status={subStatus} />
+                                  <span className="min-w-0 flex-1">
+                                    <span className="text-sky-400/90 font-medium">Part {si + 1}</span>
+                                    {sub.is_final_sub_lesson ? (
+                                      <span className="ml-1 text-[9px] font-semibold text-emerald-300/90">· quiz</span>
+                                    ) : null}
+                                    <span className="block truncate opacity-90" title={sub.title}>
+                                      {sub.title.replace(/^\(part\s+\d+\/\d+\)\s*/i, '').trim() || sub.title}
+                                    </span>
                                   </span>
                                 </button>
                               </li>
-                            ))}
+                            )})}
                           </ul>
                         ) : null}
                       </li>
@@ -355,7 +474,7 @@ export default function DashboardLessons() {
                   })}
                 </ul>
               </div>
-            ))}
+            )})}
           </div>
         )}
         {hasSyllabus && (
@@ -432,22 +551,22 @@ export default function DashboardLessons() {
                       className="mt-8 rounded-xl border p-5"
                       style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-card)' }}
                     >
-                      <h3 className="text-sm font-semibold text-[color:var(--text-primary)] mb-3">Parts to complete</h3>
+                      <h3 className="text-sm font-semibold text-[color:var(--text-primary)] mb-3">Parts in this topic</h3>
                       <p className="text-xs text-[color:var(--text-muted)] mb-3">
-                        Each part has its own short lesson and quiz. Work through them in order.
+                        Read in any order. Only the <strong>final</strong> part includes the topic quiz that unlocks the next lesson.
                       </p>
                       <div className="flex flex-col gap-2">
                         {lesson.sub_lessons.map((sub, si) => (
                           <button
                             key={sub.lesson_id}
                             type="button"
-                            onClick={() => {
-                              setSelectedLesson(sub)
-                              setCurrentLesson(sub)
-                            }}
+                            onClick={() => selectLesson(sub)}
                             className="text-left rounded-lg px-3 py-2 text-xs border border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10 text-[color:var(--text-primary)]"
                           >
                             <span className="font-semibold text-sky-300">Part {si + 1}</span>
+                            {sub.is_final_sub_lesson ? (
+                              <span className="ml-1 text-[10px] font-semibold text-emerald-300">· topic quiz</span>
+                            ) : null}
                             <span className="block text-[color:var(--text-secondary)] mt-0.5">{sub.title}</span>
                           </button>
                         ))}
@@ -468,8 +587,13 @@ export default function DashboardLessons() {
 
                     {lesson.is_parent_with_sub_lessons ? (
                       <p className="text-sm text-[color:var(--text-secondary)]">
-                        Take the quiz on each part above. This overview does not have its own assessment until all parts
-                        are passed.
+                        This overview has no quiz. Open the <strong>final</strong> part under this topic to take the one
+                        assessment that unlocks the next lesson.
+                      </p>
+                    ) : displayLesson?.is_sub_lesson && lesson?.is_final_sub_lesson === false ? (
+                      <p className="text-sm text-[color:var(--text-secondary)]">
+                        This part is reading only. Open the <strong>final</strong> part of this topic (see sidebar) to
+                        take the quiz and continue the course.
                       </p>
                     ) : !assessmentOpen ? (
                       <button
@@ -551,6 +675,7 @@ export default function DashboardLessons() {
                                 }))
                                 const resp = await quickAssessmentApi.grade(displayLesson.lesson_id, resolvedTopic, answers as any)
                                 mergeAnalyticsFromQA(resp.analytics)
+                                void refreshProgress()
                                 setAssessmentResult(
                                   resp.grading
                                     ? { correct_count: resp.grading.correct_count, total: resp.grading.total }
@@ -584,8 +709,7 @@ export default function DashboardLessons() {
                                       for (const les of mod.lessons || []) {
                                         if (les.lesson_id === pid && les.sub_lessons?.length) {
                                           const first = les.sub_lessons[0]
-                                          setSelectedLesson(first)
-                                          setCurrentLesson(first)
+                                          selectLesson(first)
                                           break outer
                                         }
                                       }
@@ -598,7 +722,7 @@ export default function DashboardLessons() {
                                   setResultModalMessage(
                                     followup?.explanation?.core_explanation
                                       ? String(followup.explanation.core_explanation)
-                                      : 'This topic was split into smaller lessons. Start with part 1 in the sidebar.'
+                                      : 'This topic was split into parts. Read them in any order; take the quiz on the final part to continue.'
                                   )
                                   setResultModalOpen(true)
                                 } else if (resp.next_action === 'retry_after_regeneration') {
@@ -725,11 +849,11 @@ export default function DashboardLessons() {
                   type="button"
                   onClick={() => {
                     if (resultModalNextLesson) {
-                      setSelectedLesson(resultModalNextLesson)
-                      setCurrentLesson(resultModalNextLesson)
+                      selectLesson(resultModalNextLesson)
                       setCurrentTopic((resultModalNextLesson as any).topic || resultModalNextLesson.lesson_id)
                       setAssessmentOpen(false)
                     }
+                    void refreshProgress()
                     setResultModalOpen(false)
                   }}
                   className="rounded-xl px-3 py-2 text-sm font-semibold text-white"

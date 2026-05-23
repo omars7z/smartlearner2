@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { LogOut, Sun, Moon } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
+import { clearLegacyUserScopedStorage } from '../utils/dashboardStorage'
 
 const AVATAR_COLORS = [
   '#3B82F6', '#06B6D4', '#8B5CF6', '#F43F5E', '#10B981', '#F59E0B',
@@ -22,6 +23,7 @@ export default function DashboardSettings() {
   }, [])
 
   const handleLogout = () => {
+    clearLegacyUserScopedStorage()
     localStorage.removeItem('smartlearner-current-user')
     localStorage.removeItem('smartlearner_token')
     navigate('/')

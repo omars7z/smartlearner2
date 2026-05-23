@@ -6,6 +6,7 @@ import { useDashboard } from '../context/DashboardContext'
 import { useToast } from '../context/ToastContext'
 import { useAccentTheme } from '../hooks/useAccentTheme'
 import { describeApiError, placementApi, type PlacementFullResult } from '../services/api'
+import { setUserPlacementResult } from '../utils/dashboardStorage'
 
 type PlacementState = 'idle' | 'loading' | 'testing' | 'results'
 
@@ -131,10 +132,7 @@ export default function DashboardPlacement() {
             placementResult,
             placementId
           )
-          try {
-            localStorage.setItem('placement_result', JSON.stringify(placementResult))
-            localStorage.setItem('current_track', placementResult.track ?? trackId)
-          } catch (_) {}
+          setUserPlacementResult(placementResult, trackId)
         }
         setResults(placementResult ?? {
           track: trackId,

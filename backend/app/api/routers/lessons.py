@@ -17,6 +17,18 @@ from ._common import get_orchestrator, parse_lesson_id
 router = APIRouter(tags=["lessons"])
 
 
+@router.get("/lessons/progress")
+async def get_lessons_progress(
+    course_id: int,
+    user_id: Annotated[int, Depends(get_current_user_id)],
+    service=Depends(get_orchestrator),
+) -> dict:
+    try:
+        return await service.get_lessons_progress(user_id=user_id, course_id=course_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
 @router.post("/lessons/generate")
 async def generate_lesson(
     payload: LessonGenerationRequest,
@@ -169,7 +181,7 @@ async def quick_assessment_grade(
             next_action = "retry_after_regeneration"
         else:
             next_action = "retry_after_regeneration"
-        return {
+        response: dict = {
             "status": "ok",
             "lesson_id": payload.lesson_id,
             "topic": payload.topic,
@@ -180,6 +192,9 @@ async def quick_assessment_grade(
                 "explanation": {"core_explanation": str(result.get("message") or "Assessment processed.")}
             },
         }
+        if isinstance(result.get("analytics"), dict):
+            response["analytics"] = result["analytics"]
+        return response
     except LessonLockedError:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

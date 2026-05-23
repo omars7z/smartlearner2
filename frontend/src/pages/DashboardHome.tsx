@@ -18,6 +18,7 @@ import { useDashboard } from '../context/DashboardContext'
 import { useToast } from '../context/ToastContext'
 import {
   describeApiError,
+  axiosErrorDetail,
   placementApi,
   type PlacementQuestionDto,
   type PlacementFullResult,
@@ -129,7 +130,7 @@ export default function DashboardHome() {
       }
     } catch (err) {
       console.error(err)
-      addToast('error', 'Failed to generate syllabus.')
+      addToast('error', axiosErrorDetail(err) ?? 'Failed to generate syllabus.')
     } finally {
       setSyllabusLoading(false)
     }

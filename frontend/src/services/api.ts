@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { applyGroqLimitsFromResponseHeaders } from '../lib/groqRateLimitsStore'
+import { clearLegacyUserScopedStorage } from '../utils/dashboardStorage'
 
 /** Strip trailing slashes and accidental `/api` or `/api/v1` so we never build `.../api/v1/api/v1`. */
 function normalizeViteApiOrigin(raw: string | undefined | null): string {
@@ -17,7 +18,11 @@ const resolvedOrigin = normalizeViteApiOrigin(import.meta.env.VITE_API_ORIGIN as
 
 /** e.g. VITE_API_ORIGIN=https://your-backend.railway.app (host only, no /api path) — same user DB when backend uses cloud DATABASE_URL */
 const API_BASE =
-  resolvedOrigin !== '' ? `${resolvedOrigin}/api/v1` : 'http://localhost:8000/api/v1'
+  resolvedOrigin !== ''
+    ? `${resolvedOrigin}/api/v1`
+    : import.meta.env.DEV
+      ? '/api/v1'
+      : 'http://127.0.0.1:8000/api/v1'
 
 export { API_BASE }
 
@@ -49,6 +54,26 @@ export const api = axios.create({
   baseURL: API_BASE,
 })
 
+/** FastAPI uses `{ detail: string | object[] }`; some legacy routes use `{ error: string }`. */
+export function axiosErrorDetail(err: unknown): string | null {
+  const data = (err as { response?: { data?: unknown } })?.response?.data
+  if (data == null || typeof data !== 'object') return null
+  const o = data as Record<string, unknown>
+  const detail = o.detail
+  if (typeof detail === 'string' && detail.trim()) return detail.trim()
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (item && typeof item === 'object' && 'msg' in item) return String((item as { msg?: string }).msg ?? '')
+      return typeof item === 'string' ? item : JSON.stringify(item)
+    })
+    const joined = parts.filter(Boolean).join(' ')
+    return joined || null
+  }
+  const legacy = o.error
+  if (typeof legacy === 'string' && legacy.trim()) return legacy.trim()
+  return null
+}
+
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('smartlearner_token')
   if (token) {
@@ -79,6 +104,7 @@ api.interceptors.response.use(
       applyGroqLimitsFromResponseHeaders(headersToRecord(error.response.headers))
     }
     if (error?.response?.status === 401) {
+      clearLegacyUserScopedStorage()
       localStorage.removeItem('smartlearner_token')
       localStorage.removeItem('smartlearner-current-user')
       if (window.location.pathname !== '/login') {
@@ -135,8 +161,12 @@ export interface AnalyticsPayload {
   mastery_state: {
     overall_accuracy: number
     topics: Record<string, number>
+    topic_trends?: Record<string, string>
     onboarding_goals?: unknown
   }
+  student_profile?: Record<string, unknown>
+  velocity_map?: Record<string, { velocity: number; momentum: number; trend: string; sessions_count: number }>
+  risk_factors?: string[]
 }
 
 export interface QAExplanationResult {
@@ -271,6 +301,8 @@ export interface LessonDto {
   course_id?: number
   parent_lesson_id?: number | null
   is_sub_lesson?: boolean
+  /** Only the final sub-lesson carries the topic quiz that unlocks the next lesson. */
+  is_final_sub_lesson?: boolean
   sub_lessons?: LessonDto[]
 }
 
@@ -375,6 +407,8 @@ export interface StructuredLesson {
   sections: LessonSection[]
   sub_lessons?: LessonDto[]
   is_parent_with_sub_lessons?: boolean
+  is_sub_lesson?: boolean
+  is_final_sub_lesson?: boolean
   course_id?: number
 }
 
@@ -385,7 +419,28 @@ export interface GetLessonResponse {
   llm_used?: boolean
 }
 
+export interface LessonsProgressResponse {
+  course_id: number
+  completed_assessable: number
+  total_assessable: number
+  overall_percent: number
+  lessons: Record<
+    string,
+    {
+      passed: boolean
+      accessible: boolean
+      block_passed: boolean
+      attempts: number
+      last_score?: number | null
+    }
+  >
+}
+
 export const lessonsApi = {
+  async getProgress(courseId: number) {
+    const res = await api.get<LessonsProgressResponse>(`/lessons/progress?course_id=${courseId}`)
+    return res.data
+  },
   async getContent(topic?: string, lessonId?: string) {
     const params = new URLSearchParams()
     if (topic) params.set('topic', topic)
@@ -434,14 +489,33 @@ export interface ExamGradeEnvelope {
   result: {
     status: string
     lesson_id: string
+    score?: number
+    total?: number
     overall_score: number
+    passed?: boolean
     difficulty_breakdown: Record<string, number>
+    results?: {
+      question_id: string
+      question_text: string
+      correct: boolean
+      student_answer: string
+      correct_answer: string
+      explanation?: string
+    }[]
+    analytics?: AnalyticsPayload
   }
 }
 
 export const examsApi = {
-  async generate(lessonId: string) {
-    const res = await api.post<ExamGenerateEnvelope>('/exams/generate', { lesson_id: lessonId })
+  async generate(
+    lessonId: string,
+    opts?: { level?: 'beginner' | 'intermediate' | 'advanced'; question_count?: number },
+  ) {
+    const res = await api.post<ExamGenerateEnvelope>('/exams/generate', {
+      lesson_id: lessonId,
+      level: opts?.level ?? 'beginner',
+      question_count: opts?.question_count ?? 5,
+    }, { timeout: 120_000 })
     return res.data
   },
   async grade(lessonId: string, answers: { question_id: string; answer_index: number }[]) {
@@ -540,10 +614,41 @@ export interface AnalyticsSummaryResponse {
       strengths: { concept: string; evidence: string }[]
       weaknesses: { concept: string; evidence: string; severity?: string }[]
       patterns: string[]
+      motivating_recommendations?: string[]
       recommendations: { priority: number; action: string; target_concept?: string }[]
       next_best_lesson: { topic: string; reason: string }
       risk_level: 'low' | 'medium' | 'high'
+      risk_factors?: string[]
       confidence: 'low' | 'medium' | 'high'
+    }
+    agent_output?: {
+      student_id: string
+      timestamp?: string
+      student_profile?: {
+        learning_speed?: number
+        consistency_score?: number
+        avg_quiz_score?: number
+        total_interactions?: number
+        adaptive_params?: Record<string, number>
+      }
+      mastery_state: Record<string, number>
+      velocity_map?: Record<string, { velocity: number; momentum: number; trend: string; sessions_count: number }>
+      weakness_flags?: { topic: string; reason: string; severity: string; signal_count?: number }[]
+      progress_report?: {
+        completed_topics: string[]
+        in_progress_topics: string[]
+        weak_topics: string[]
+        mastery_summary: Record<string, number>
+        overall_progress_percent: number
+        recommendation: string
+        next_topic: string
+        topic_trends?: Record<string, string>
+      }
+      risk_flag?: boolean
+      risk_factors?: string[]
+      next_action?: string
+      personal_summary?: string
+      motivating_recommendations?: string[]
     }
   }
 }
