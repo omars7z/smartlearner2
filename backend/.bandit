@@ -1,0 +1,4 @@
+[bandit]
+exclude = venv,.venv,vector_db,experiments,data_pipeline
+# Asserts used in dev / smoke paths
+skips = B101

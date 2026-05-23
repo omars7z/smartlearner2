@@ -1,0 +1,2 @@
+# Dev / CI tooling (not installed in production Docker image)
+bandit[toml]>=1.8.0,<2
