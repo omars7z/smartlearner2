@@ -284,34 +284,9 @@ class OrchestratorService:
 
     @staticmethod
     def _build_fallback_placement_questions(level: str, track: str) -> list[dict]:
-        """
-        Deterministic fallback so placement/start never hard-fails on transient LLM issues.
-        """
-        from app.core.placement_rubric import concepts_for_level
+        from app.core.placement_fallback import build_placement_fallback_questions
 
-        concepts = list(concepts_for_level(level, track=track))
-        questions: list[dict] = []
-        for concept in concepts[:QUESTIONS_PER_LEVEL]:
-            stem = (
-                f"Which statement best matches this concept: {concept}?"
-                if track in {"deep_learning", "dl"}
-                else f"In Python, which option best describes: {concept}?"
-            )
-            choices = [
-                f"A clear definition and practical use of {concept}",
-                "An unrelated advanced topic from another stage",
-                "A statement that contradicts the concept",
-                "A vague statement with no concrete meaning",
-            ]
-            questions.append(
-                {
-                    "question": stem,
-                    "choices": choices,
-                    "correct_answer": choices[0],
-                    "concept": concept,
-                }
-            )
-        return questions
+        return build_placement_fallback_questions(level, track)
 
     @staticmethod
     def _placement_track(payload: dict | None) -> str:
@@ -933,49 +908,80 @@ class OrchestratorService:
             return {"status": "ok", "finished": True, "placement_result": placement_result}
 
         next_level = LEVEL_ORDER[level_index + 1]
-        raw = self.placement_generator.generate(
-            level=next_level,
-            question_count=QUESTIONS_PER_LEVEL,
-            track=normalize_track(track),
-        )
-        await self.agent_repo.log_run(
-            agent_name=self.placement_generator.name,
-            stage="generate",
-            input_json={
-                "level": next_level,
-                "question_count": QUESTIONS_PER_LEVEL,
-                "track": track,
-                "flow": "session_advance",
-            },
-            output_json=raw,
-            is_valid=True,
-            user_id=user_id,
-        )
-        try:
-            generated = self.placement_validator.validate(
-                raw,
-                next_level,
-                QUESTIONS_PER_LEVEL,
-                track=normalize_track(track),
+        gen_track = "deep_learning" if normalize_track(track) in ("deep_learning", "dl") else "python"
+        generated: dict | None = None
+        last_adv_exc: AgentValidationError | None = None
+        for attempt in range(3):
+            try:
+                raw = self.placement_generator.generate(
+                    level=next_level,
+                    question_count=QUESTIONS_PER_LEVEL,
+                    track=gen_track,
+                )
+            except AgentValidationError as exc:
+                last_adv_exc = exc
+                continue
+            await self.agent_repo.log_run(
+                agent_name=self.placement_generator.name,
+                stage="generate",
+                input_json={
+                    "level": next_level,
+                    "question_count": QUESTIONS_PER_LEVEL,
+                    "track": track,
+                    "flow": "session_advance",
+                    "attempt": attempt + 1,
+                    "gen_track": gen_track,
+                },
+                output_json=raw,
+                is_valid=True,
+                user_id=user_id,
             )
-        except AgentValidationError as exc:
+            try:
+                generated = self.placement_validator.validate(
+                    raw,
+                    next_level,
+                    QUESTIONS_PER_LEVEL,
+                    track=gen_track,
+                )
+            except AgentValidationError as exc:
+                last_adv_exc = exc
+                await self.agent_repo.log_run(
+                    agent_name=self.placement_validator.name,
+                    stage="validate",
+                    input_json={"level": next_level, "question_count": QUESTIONS_PER_LEVEL, "track": track},
+                    output_json={"error": str(exc)},
+                    is_valid=False,
+                    user_id=user_id,
+                )
+                generated = None
+                continue
             await self.agent_repo.log_run(
                 agent_name=self.placement_validator.name,
                 stage="validate",
                 input_json={"level": next_level, "question_count": QUESTIONS_PER_LEVEL, "track": track},
-                output_json={"error": str(exc)},
-                is_valid=False,
+                output_json=generated,
+                is_valid=True,
                 user_id=user_id,
             )
-            raise
-        await self.agent_repo.log_run(
-            agent_name=self.placement_validator.name,
-            stage="validate",
-            input_json={"level": next_level, "question_count": QUESTIONS_PER_LEVEL, "track": track},
-            output_json=generated,
-            is_valid=True,
-            user_id=user_id,
-        )
+            break
+
+        if not generated:
+            generated = {"questions": self._build_fallback_placement_questions(next_level, gen_track)}
+            await self.agent_repo.log_run(
+                agent_name=self.placement_generator.name,
+                stage="fallback_generate",
+                input_json={
+                    "level": next_level,
+                    "question_count": QUESTIONS_PER_LEVEL,
+                    "track": track,
+                    "gen_track": gen_track,
+                    "flow": "session_advance",
+                    "reason": str(last_adv_exc) if last_adv_exc else "unknown",
+                },
+                output_json=generated,
+                is_valid=True,
+                user_id=user_id,
+            )
 
         data["questions"] = generated["questions"]
         sess["level_index"] = level_index + 1

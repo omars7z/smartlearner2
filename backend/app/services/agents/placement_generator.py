@@ -32,10 +32,10 @@ PLACEMENT_MCQ_SYSTEM_PROMPT = (
     "and distractors; never reuse the same question template or stem pattern."
 )
 
-# User message template for .format(): lvl, chunk_text, rubric_concept, slot (1-based), question_count
+# User message template for .format(): lvl, chapter_scope, chunk_text, rubric_concept, slot, question_count
 DEFAULT_PLACEMENT_USER_PROMPT_TEMPLATE = (
-    "Placement level: {lvl}. "
-    "Allowed chapters for this level: beginner=Ch1-3,Ch6 | intermediate=Ch4,5,7,8,9,10 | advanced=Ch11-13 | very_advanced=Ch14-16.\n"
+    "Placement level: {lvl}.\n"
+    "Allowed scope for this level: {chapter_scope}\n"
     "RAG context:\n{chunk_text}\n\n"
     "Rubric objective (you MUST test THIS concept and ONLY this concept): {rubric_concept}\n"
     "Question slot {slot} of {question_count}.\n"
@@ -46,7 +46,7 @@ DEFAULT_PLACEMENT_USER_PROMPT_TEMPLATE = (
     "- Uses vocabulary and difficulty appropriate for {lvl} level\n"
     "- Does NOT introduce concepts from other levels or chapters\n"
     "- Does NOT repeat wording, scenarios, or stems from other slots in this test\n"
-    "- Avoid overused examples such as x = 3.14, x = 42, or name = \"Alice\" unless you change the angle\n"
+    "- Avoid overused examples unless you change the angle\n"
     "Return JSON only."
 )
 
@@ -73,9 +73,117 @@ _SCENARIO_HINTS_BY_CONCEPT: dict[str, tuple[str, ...]] = {
     ),
 }
 
+_DEEP_LEARNING_SCENARIO_HINTS: dict[str, tuple[str, ...]] = {
+    "Introduction to machine and deep learning": (
+        "Ask what distinguishes deep learning from traditional feature engineering.",
+        "Use a scenario about labeled vs unlabeled data.",
+        "Ask about when neural networks are preferred over linear models.",
+    ),
+    "Supervised learning and data splits": (
+        "Ask about train/validation/test purpose.",
+        "Use a small dataset split ratio question.",
+        "Ask why validation data must not leak into training.",
+    ),
+    "Logistic regression intuition": (
+        "Ask about sigmoid output interpretation.",
+        "Use binary classification with two features.",
+        "Ask what logits represent before sigmoid.",
+    ),
+    "Gradient descent and learning rate": (
+        "Ask how learning rate affects convergence.",
+        "Use a loss curve that diverges with lr too high.",
+        "Ask about batch vs stochastic gradient descent.",
+    ),
+    "Loss functions for classification": (
+        "Ask when cross-entropy is used.",
+        "Compare MSE vs cross-entropy for classification.",
+        "Ask what happens if labels are wrong for loss computation.",
+    ),
+    "Feed-forward network layers": (
+        "Ask about input/hidden/output layer roles.",
+        "Use a network with stated input and output dimensions.",
+        "Ask why depth adds representational capacity.",
+    ),
+    "Activation functions": (
+        "Ask why ReLU is common in hidden layers.",
+        "Compare ReLU vs sigmoid for vanishing gradients.",
+        "Ask which activation suits binary output.",
+    ),
+    "Forward propagation and shapes": (
+        "Ask matrix multiply shape compatibility.",
+        "Use a 2-layer MLP with given dimensions.",
+        "Ask what happens if weight matrix shapes mismatch.",
+    ),
+    "Backpropagation intuition": (
+        "Ask what chain rule role is in backprop.",
+        "Ask which parameters get updated after backward pass.",
+        "Use a simple computational graph scenario.",
+    ),
+    "Training an MLP": (
+        "Ask about epochs, batches, and loss monitoring.",
+        "Ask when to stop training early.",
+        "Use overfitting on small data as scenario.",
+    ),
+    "Convolutional neural networks": (
+        "Ask why conv layers suit image data.",
+        "Ask about local receptive fields vs fully connected.",
+        "Use a small feature map example.",
+    ),
+    "Convolution pooling and feature maps": (
+        "Ask what pooling reduces (spatial size / parameters).",
+        "Ask stride vs padding effect on output size.",
+        "Use max pooling on a 2x2 window.",
+    ),
+    "RNN and sequence modeling": (
+        "Ask why RNNs handle variable-length sequences.",
+        "Ask about hidden state carrying past context.",
+        "Use a simple next-token prediction scenario.",
+    ),
+    "LSTM and GRU gates": (
+        "Ask what forget/input/output gates control.",
+        "Compare LSTM vs vanilla RNN on long sequences.",
+        "Ask why gating helps vanishing gradients.",
+    ),
+    "Sequence task applications": (
+        "Ask which tasks are sequence-to-sequence.",
+        "Use machine translation or time-series example.",
+        "Ask about encoder-decoder structure.",
+    ),
+    "Classification evaluation metrics": (
+        "Ask when accuracy is misleading.",
+        "Use imbalanced classes scenario.",
+        "Ask about true/false positive definitions.",
+    ),
+    "Precision recall and F1": (
+        "Ask trade-off when precision vs recall matters.",
+        "Compute F1 from given precision/recall.",
+        "Use medical diagnosis cost scenario.",
+    ),
+    "Confusion matrix interpretation": (
+        "Ask to read TP/FP/FN/TN from a matrix.",
+        "Ask which cell is false negative.",
+        "Use a 2x2 confusion matrix with numbers.",
+    ),
+    "Regression metrics (MSE MAE)": (
+        "Ask when MAE is more robust than MSE.",
+        "Compare sensitivity to outliers.",
+        "Use predicted vs actual numeric example.",
+    ),
+    "Choosing metrics for a task": (
+        "Ask which metric fits fraud detection.",
+        "Ask metric choice for multi-class vs binary.",
+        "Use business cost of false negatives scenario.",
+    ),
+}
 
-def _scenario_hint_for(concept: str, attempt: int) -> str:
-    hints = _SCENARIO_HINTS_BY_CONCEPT.get(concept)
+
+def _scenario_hint_for(concept: str, attempt: int, *, track: str = "python") -> str:
+    track_key = (track or "python").strip().lower().replace("-", "_")
+    hints = (
+        _DEEP_LEARNING_SCENARIO_HINTS.get(concept)
+        if track_key in {"deep_learning", "dl"}
+        else _SCENARIO_HINTS_BY_CONCEPT.get(concept)
+    )
     if not hints:
         return (
             f"Pick scenario variant #{attempt + 1}: use a different variable name, "
@@ -203,16 +311,18 @@ class PlacementGeneratorAgent(AgentPair):
         pool_fallback = self.rag.retrieve_python_basics_context(
             f"{track_key} {lvl} placement diagnostic lecture notes",
             k=24,
+            track=track_key,
         )
         if not pool_fallback:
             pool_fallback = [
-                "Python for Everybody (PY4E) foundations: variables, expressions, conditionals, strings, "
-                "basic I/O, and reading small programs including errors and tracebacks."
-                if track_key not in {"deep_learning", "dl"}
-                else "AI342 Deep Learning: introduction, logistic regression, gradient descent, "
+                "AI342 Deep Learning: introduction, logistic regression, gradient descent, "
                 "feed-forward networks, CNNs, sequence models, and evaluation metrics."
+                if track_key in {"deep_learning", "dl"}
+                else "Python for Everybody (PY4E) foundations: variables, expressions, conditionals, strings, "
+                "basic I/O, and reading small programs including errors and tracebacks."
             ]
 
+        chapter_scope = chapter_scope_for_level(lvl, track=track_key)
         questions: list[dict] = []
         session_variation_id = uuid.uuid4().hex[:10]
 
@@ -221,6 +331,7 @@ class PlacementGeneratorAgent(AgentPair):
             slot_chunks = self.rag.retrieve_python_basics_context(
                 f"{track_key} {lvl} {rubric_concept} lecture notes",
                 k=14,
+                track=track_key,
             )
             if not slot_chunks:
                 slot_chunks = pool_fallback
@@ -238,12 +349,13 @@ class PlacementGeneratorAgent(AgentPair):
             for attempt in range(max_attempts):
                 user_prompt = user_tpl.format(
                     lvl=lvl,
+                    chapter_scope=chapter_scope,
                     chunk_text=chunk_text,
                     rubric_concept=rubric_concept,
                     slot=idx + 1,
                     question_count=question_count,
                     variation_id=f"{session_variation_id}-s{idx + 1}-a{attempt + 1}",
-                    scenario_hint=_scenario_hint_for(rubric_concept, attempt),
+                    scenario_hint=_scenario_hint_for(rubric_concept, attempt, track=track_key),
                 )
                 if rejected_similar_in_slot:
                     user_prompt += (

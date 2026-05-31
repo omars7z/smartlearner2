@@ -253,9 +253,29 @@ class RAGService:
     def retrieve_course_context(self, query: str, k: int = 3, *, track: str | None = None) -> list[str]:
         """
         Lexical match over chunk text + TOC metadata.
-        `track` is reserved for multi-course indexes; today's PY4E index remains the default.
+        When `track` is set, prefer chunks from that course (Python vs Deep Learning).
         """
         chunks = self._chunks_for_retrieval()
+        if track:
+            track_key = track.strip().lower().replace("-", "_")
+            if track_key in {"deep_learning", "dl"}:
+                filtered = [
+                    c
+                    for c in chunks
+                    if "deep learning" in str(c.get("track", "")).lower()
+                    or str(c.get("source", "")).lower().startswith("dl_")
+                ]
+            elif track_key == "python":
+                filtered = [
+                    c
+                    for c in chunks
+                    if "python" in str(c.get("track", "")).lower()
+                    or str(c.get("source", "")).startswith("py4e_")
+                ]
+            else:
+                filtered = []
+            if filtered:
+                chunks = filtered
         q_raw = (query or "").strip()
         q_tokens = {t for t in re.findall(r"[a-zA-Z_]{3,}", q_raw.lower())}
         q_lower = q_raw.lower()
@@ -290,6 +310,6 @@ class RAGService:
                 out.append(passage)
         return out
 
-    def retrieve_python_basics_context(self, query: str, k: int = 3) -> list[str]:
-        """Backward-compatible wrapper for the original Python/PY4E track."""
-        return self.retrieve_course_context(query, k=k, track="python")
+    def retrieve_python_basics_context(self, query: str, k: int = 3, *, track: str = "python") -> list[str]:
+        """Track-scoped RAG retrieval (defaults to Python/PY4E)."""
+        return self.retrieve_course_context(query, k=k, track=track)

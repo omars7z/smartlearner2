@@ -416,32 +416,53 @@ class LLMClient:
             if len(concept) > 80:
                 concept = concept[:80].strip()
             concept_text = concept or "python basics"
-            stems = [
-                f"A student is reviewing {concept_text}. Which statement is most accurate?",
-                f"Which option best reflects how {concept_text} works in Python?",
-                f"In a beginner Python lesson, what does {concept_text} usually mean?",
-                f"Pick the best explanation of {concept_text}.",
-                f"When solving simple problems, how should you think about {concept_text}?",
-                f"Which choice shows correct understanding of {concept_text}?",
-                f"A quiz asks about {concept_text}. Which answer should be selected?",
-                f"From these options, choose the strongest description of {concept_text}.",
-            ]
-            corrects = [
-                f"It focuses on {concept_text} and applying it correctly in small Python tasks.",
-                f"It is a core idea about {concept_text}, used to write predictable Python code.",
-                f"It helps reason about {concept_text} while avoiding common beginner mistakes.",
-                f"It describes practical use of {concept_text} in normal Python exercises.",
-            ]
-            wrong_pool = [
-                "It means Python programs never produce runtime errors.",
-                "It is only relevant for machine learning projects.",
-                "It can only be used inside web frameworks.",
-                "It is unrelated to expressions, conditions, or loops.",
-                "It is only useful after learning advanced networking topics.",
-                "It replaces the need to test or debug your code.",
-                "It is a syntax rule that applies only to class inheritance.",
-                "It is not used in beginner-level Python at all.",
-            ]
+            is_dl = "deep learning" in sp or "ai342" in sp or "track: deep_learning" in sp or "track: dl" in sp
+            if is_dl:
+                stems = [
+                    f"Which statement best describes {concept_text} in deep learning?",
+                    f"In AI342 lectures, what is the role of {concept_text}?",
+                    f"A student reviews {concept_text}. Which answer is most accurate?",
+                    f"For {concept_text}, which option shows correct understanding?",
+                ]
+                corrects = [
+                    f"It reflects the AI342 definition and use of {concept_text}.",
+                    f"It correctly explains {concept_text} in a neural network context.",
+                    f"It matches how {concept_text} is applied during model training.",
+                ]
+                wrong_pool = [
+                    "It only applies to classical ML with no neural networks.",
+                    "It is unrelated to loss functions or gradient updates.",
+                    "It means weights are never updated during training.",
+                    "It is only used in NLP, never in computer vision.",
+                    "It guarantees perfect accuracy without validation data.",
+                ]
+            else:
+                stems = [
+                    f"A student is reviewing {concept_text}. Which statement is most accurate?",
+                    f"Which option best reflects how {concept_text} works in Python?",
+                    f"In a beginner Python lesson, what does {concept_text} usually mean?",
+                    f"Pick the best explanation of {concept_text}.",
+                    f"When solving simple problems, how should you think about {concept_text}?",
+                    f"Which choice shows correct understanding of {concept_text}?",
+                    f"A quiz asks about {concept_text}. Which answer should be selected?",
+                    f"From these options, choose the strongest description of {concept_text}.",
+                ]
+                corrects = [
+                    f"It focuses on {concept_text} and applying it correctly in small Python tasks.",
+                    f"It is a core idea about {concept_text}, used to write predictable Python code.",
+                    f"It helps reason about {concept_text} while avoiding common beginner mistakes.",
+                    f"It describes practical use of {concept_text} in normal Python exercises.",
+                ]
+                wrong_pool = [
+                    "It means Python programs never produce runtime errors.",
+                    "It is only relevant for machine learning projects.",
+                    "It can only be used inside web frameworks.",
+                    "It is unrelated to expressions, conditions, or loops.",
+                    "It is only useful after learning advanced networking topics.",
+                    "It replaces the need to test or debug your code.",
+                    "It is a syntax rule that applies only to class inheritance.",
+                    "It is not used in beginner-level Python at all.",
+                ]
             question = random.choice(stems)
             correct = random.choice(corrects)
             wrongs = random.sample(wrong_pool, k=3)

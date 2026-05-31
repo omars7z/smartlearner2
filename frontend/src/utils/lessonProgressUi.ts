@@ -30,11 +30,40 @@ export function resolveLessonUiStatus(
   progressMap: Record<string, LessonProgressEntry>,
 ): LessonUiStatus {
   const entry = progressMap[lesson.lesson_id]
-  if (entry && !entry.accessible) return 'locked'
+  // Completed before locked — stale `accessible: false` must not override a passed block.
   if (entry?.block_passed) return 'completed'
   if (entry?.passed && isQuizCheckpoint(lesson)) return 'completed'
+  if (entry && !entry.accessible) return 'locked'
   if (entry && entry.attempts > 0 && !entry.passed && isQuizCheckpoint(lesson)) return 'failed'
   return 'available'
+}
+
+/** After a passed quiz, unlock the next lesson in local state until progress API catches up. */
+export function patchProgressAfterPass(
+  map: Record<string, LessonProgressEntry>,
+  passedLessonId: string,
+  nextLessonId?: string | null,
+): Record<string, LessonProgressEntry> {
+  const next = { ...map }
+  const prev = next[passedLessonId]
+  next[passedLessonId] = {
+    passed: true,
+    accessible: true,
+    block_passed: true,
+    attempts: prev?.attempts ?? 1,
+    last_score: prev?.last_score ?? 5,
+  }
+  if (nextLessonId) {
+    const nxt = next[nextLessonId]
+    next[nextLessonId] = {
+      passed: nxt?.passed ?? false,
+      accessible: true,
+      block_passed: nxt?.block_passed ?? false,
+      attempts: nxt?.attempts ?? 0,
+      last_score: nxt?.last_score,
+    }
+  }
+  return next
 }
 
 export function moduleProgressStats(

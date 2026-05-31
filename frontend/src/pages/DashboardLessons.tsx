@@ -19,6 +19,7 @@ import {
 import {
   extractCourseIdFromModules,
   moduleProgressStats,
+  patchProgressAfterPass,
   resolveLessonUiStatus,
   type LessonProgressEntry,
   type LessonUiStatus,
@@ -73,34 +74,45 @@ export default function DashboardLessons() {
   const [progressMap, setProgressMap] = useState<Record<string, LessonProgressEntry>>({})
   const [progressSummary, setProgressSummary] = useState({ completed: 0, total: 0, percent: 0 })
   const lessonTopRef = useRef<HTMLDivElement | null>(null)
+  const progressMapRef = useRef(progressMap)
+  const postPassProgressRef = useRef<Record<string, LessonProgressEntry>>({})
+  progressMapRef.current = progressMap
 
   const courseId = useMemo(() => extractCourseIdFromModules(syllabusModules), [syllabusModules])
 
-  const refreshProgress = useCallback(async () => {
+  const refreshProgress = useCallback(async (): Promise<Record<string, LessonProgressEntry>> => {
     if (!courseId) {
       setProgressMap({})
       setProgressSummary({ completed: 0, total: 0, percent: 0 })
-      return
+      return {}
     }
     try {
       const data = await lessonsApi.getProgress(courseId)
-      setProgressMap(data.lessons ?? {})
+      const lessons = data.lessons ?? {}
+      setProgressMap(lessons)
       setProgressSummary({
         completed: data.completed_assessable ?? 0,
         total: data.total_assessable ?? 0,
         percent: data.overall_percent ?? 0,
       })
+      return lessons
     } catch {
-      /* keep last snapshot */
+      return progressMapRef.current
     }
   }, [courseId])
 
   const selectLesson = useCallback(
-    (lesson: LessonDto) => {
-      const status = resolveLessonUiStatus(lesson, progressMap)
-      if (status === 'locked') {
-        addToast('error', 'Complete the previous lesson quiz to unlock this one.')
-        return
+    (
+      lesson: LessonDto,
+      opts?: { skipLockCheck?: boolean; progressSnapshot?: Record<string, LessonProgressEntry> },
+    ) => {
+      const map = opts?.progressSnapshot ?? progressMap
+      if (!opts?.skipLockCheck) {
+        const status = resolveLessonUiStatus(lesson, map)
+        if (status === 'locked') {
+          addToast('error', 'Complete the previous lesson quiz to unlock this one.')
+          return
+        }
       }
       setSelectedLesson(lesson)
       setCurrentLesson(lesson)
@@ -556,12 +568,20 @@ export default function DashboardLessons() {
                         Read in any order. Only the <strong>final</strong> part includes the topic quiz that unlocks the next lesson.
                       </p>
                       <div className="flex flex-col gap-2">
-                        {lesson.sub_lessons.map((sub, si) => (
+                        {lesson.sub_lessons.map((sub, si) => {
+                          const subStatus = resolveLessonUiStatus(sub, progressMap)
+                          const subLocked = subStatus === 'locked'
+                          return (
                           <button
                             key={sub.lesson_id}
                             type="button"
+                            disabled={subLocked}
                             onClick={() => selectLesson(sub)}
-                            className="text-left rounded-lg px-3 py-2 text-xs border border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10 text-[color:var(--text-primary)]"
+                            className={`text-left rounded-lg px-3 py-2 text-xs border ${
+                              subLocked
+                                ? 'border-slate-600/40 bg-slate-800/20 text-slate-500 cursor-not-allowed opacity-70'
+                                : 'border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10 text-[color:var(--text-primary)]'
+                            }`}
                           >
                             <span className="font-semibold text-sky-300">Part {si + 1}</span>
                             {sub.is_final_sub_lesson ? (
@@ -569,7 +589,8 @@ export default function DashboardLessons() {
                             ) : null}
                             <span className="block text-[color:var(--text-secondary)] mt-0.5">{sub.title}</span>
                           </button>
-                        ))}
+                          )
+                        })}
                       </div>
                     </div>
                   ) : null}
@@ -675,7 +696,26 @@ export default function DashboardLessons() {
                                 }))
                                 const resp = await quickAssessmentApi.grade(displayLesson.lesson_id, resolvedTopic, answers as any)
                                 mergeAnalyticsFromQA(resp.analytics)
-                                void refreshProgress()
+                                let progressSnapshot = progressMapRef.current
+                                if (resp.next_action === 'advance_to_next_lesson') {
+                                  const idx = orderedFlatLessons.findIndex(
+                                    (x) => x.lesson.lesson_id === displayLesson.lesson_id,
+                                  )
+                                  const nextEntry = idx >= 0 ? orderedFlatLessons[idx + 1] : null
+                                  progressSnapshot = patchProgressAfterPass(
+                                    progressMapRef.current,
+                                    displayLesson.lesson_id,
+                                    nextEntry?.lesson.lesson_id,
+                                  )
+                                  setProgressMap(progressSnapshot)
+                                  postPassProgressRef.current = progressSnapshot
+                                }
+                                try {
+                                  progressSnapshot = await refreshProgress()
+                                  postPassProgressRef.current = progressSnapshot
+                                } catch {
+                                  /* keep optimistic snapshot */
+                                }
                                 setAssessmentResult(
                                   resp.grading
                                     ? { correct_count: resp.grading.correct_count, total: resp.grading.total }
@@ -849,7 +889,10 @@ export default function DashboardLessons() {
                   type="button"
                   onClick={() => {
                     if (resultModalNextLesson) {
-                      selectLesson(resultModalNextLesson)
+                      selectLesson(resultModalNextLesson, {
+                        skipLockCheck: true,
+                        progressSnapshot: postPassProgressRef.current,
+                      })
                       setCurrentTopic((resultModalNextLesson as any).topic || resultModalNextLesson.lesson_id)
                       setAssessmentOpen(false)
                     }
