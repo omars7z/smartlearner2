@@ -25,6 +25,19 @@ import {
   type LessonUiStatus,
 } from '../utils/lessonProgressUi'
 
+const ASSESSMENT_PASSING_SCORE_PERCENT = 80
+
+function findFirstSubLesson(modules: ModuleDto[], parentLessonId: string): LessonDto | null {
+  for (const mod of modules) {
+    for (const les of mod.lessons ?? []) {
+      if (les.lesson_id === parentLessonId && les.sub_lessons?.length) {
+        return les.sub_lessons[0]
+      }
+    }
+  }
+  return null
+}
+
 function LessonStatusIcon({ status }: { status: LessonUiStatus }) {
   if (status === 'completed') {
     return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" aria-hidden />
@@ -68,8 +81,12 @@ export default function DashboardLessons() {
   const [assessmentStatusMessage, setAssessmentStatusMessage] = useState<string | null>(null)
   const [resultModalOpen, setResultModalOpen] = useState(false)
   const [resultModalPassed, setResultModalPassed] = useState(false)
+  const [resultModalRemediation, setResultModalRemediation] = useState(false)
   const [resultModalMessage, setResultModalMessage] = useState('')
   const [resultModalNextLesson, setResultModalNextLesson] = useState<LessonDto | null>(null)
+  const [remediationParentLessonId, setRemediationParentLessonId] = useState<string | null>(null)
+  const [remediationFirstSubLesson, setRemediationFirstSubLesson] = useState<LessonDto | null>(null)
+  const [expandedSidebarParentIds, setExpandedSidebarParentIds] = useState<Set<string>>(() => new Set())
   const [lessonLockMessage, setLessonLockMessage] = useState<string | null>(null)
   const [progressMap, setProgressMap] = useState<Record<string, LessonProgressEntry>>({})
   const [progressSummary, setProgressSummary] = useState({ completed: 0, total: 0, percent: 0 })
@@ -150,6 +167,17 @@ export default function DashboardLessons() {
   }, [refreshProgress, syllabusModules])
 
   useEffect(() => {
+    const withSubs = new Set<string>()
+    for (const mod of syllabusOrdered) {
+      for (const les of mod.lessons ?? []) {
+        if (les.sub_lessons?.length) withSubs.add(les.lesson_id)
+      }
+    }
+    if (withSubs.size === 0) return
+    setExpandedSidebarParentIds((prev) => new Set([...prev, ...withSubs]))
+  }, [syllabusOrdered])
+
+  useEffect(() => {
     if (!displayLesson) {
       setLesson(null)
       setLessonLockMessage(null)
@@ -190,9 +218,42 @@ export default function DashboardLessons() {
     setAssessmentStatusMessage(null)
     setResultModalOpen(false)
     setResultModalPassed(false)
+    setResultModalRemediation(false)
     setResultModalMessage('')
     setResultModalNextLesson(null)
+    setRemediationParentLessonId(null)
+    setRemediationFirstSubLesson(null)
   }, [displayLesson?.lesson_id])
+
+  const closeResultModal = useCallback(() => {
+    setResultModalOpen(false)
+    setResultModalRemediation(false)
+    setRemediationFirstSubLesson(null)
+  }, [])
+
+  const goToRemediationSubLessons = useCallback(() => {
+    if (remediationFirstSubLesson) {
+      selectLesson(remediationFirstSubLesson)
+      setCurrentTopic(
+        (remediationFirstSubLesson as { topic?: string }).topic || remediationFirstSubLesson.lesson_id,
+      )
+    }
+    if (remediationParentLessonId) {
+      setExpandedSidebarParentIds((prev) => new Set([...prev, remediationParentLessonId]))
+    }
+    void refreshProgress()
+    setAssessmentOpen(false)
+    setAssessmentQuestions([])
+    setAssessmentAnswers({})
+    closeResultModal()
+  }, [
+    closeResultModal,
+    remediationFirstSubLesson,
+    remediationParentLessonId,
+    refreshProgress,
+    selectLesson,
+    setCurrentTopic,
+  ])
 
   const renderSection = (section: LessonSection, idx: number) => {
     if (section.type === 'markdown') {
@@ -443,8 +504,14 @@ export default function DashboardLessons() {
                             ) : null}
                           </span>
                         </button>
-                        {lesson.sub_lessons?.length ? (
-                          <ul className="mt-1 ml-2 space-y-0.5 border-l border-white/10 pl-2">
+                        {lesson.sub_lessons?.length && expandedSidebarParentIds.has(lesson.lesson_id) ? (
+                          <ul
+                            className={`mt-1 ml-2 space-y-0.5 border-l pl-2 ${
+                              remediationParentLessonId === lesson.lesson_id
+                                ? 'border-amber-400/50'
+                                : 'border-white/10'
+                            }`}
+                          >
                             {lesson.sub_lessons.map((sub, si) => {
                               const subStatus = resolveLessonUiStatus(sub, progressMap)
                               const subLocked = subStatus === 'locked'
@@ -741,31 +808,27 @@ export default function DashboardLessons() {
                                   )
                                   setResultModalOpen(true)
                                 } else if (resp.next_action === 'go_to_sub_lessons') {
-                                  const mods = resp.updated_syllabus_modules
-                                  if (mods?.length) {
-                                    setSyllabusModules(mods as ModuleDto[])
-                                    const pid = displayLesson.lesson_id
-                                    outer: for (const mod of mods) {
-                                      for (const les of mod.lessons || []) {
-                                        if (les.lesson_id === pid && les.sub_lessons?.length) {
-                                          const first = les.sub_lessons[0]
-                                          selectLesson(first)
-                                          break outer
-                                        }
-                                      }
-                                    }
+                                  const mods = (resp.updated_syllabus_modules ?? []) as ModuleDto[]
+                                  const pid = displayLesson.lesson_id
+                                  if (mods.length) {
+                                    setSyllabusModules(mods)
                                   }
+                                  const firstSub = mods.length ? findFirstSubLesson(mods, pid) : null
+                                  setRemediationParentLessonId(pid)
+                                  setRemediationFirstSubLesson(firstSub)
+                                  if (pid) {
+                                    setExpandedSidebarParentIds((prev) => new Set([...prev, pid]))
+                                  }
+                                  void refreshProgress()
                                   setAssessmentOpen(false)
                                   setAssessmentQuestions([])
                                   setAssessmentAnswers({})
                                   setResultModalPassed(false)
-                                  setResultModalMessage(
-                                    followup?.explanation?.core_explanation
-                                      ? String(followup.explanation.core_explanation)
-                                      : 'This topic was split into parts. Read them in any order; take the quiz on the final part to continue.'
-                                  )
+                                  setResultModalRemediation(true)
+                                  setResultModalMessage('')
                                   setResultModalOpen(true)
                                 } else if (resp.next_action === 'retry_after_regeneration') {
+                                  setResultModalRemediation(false)
                                   // The backend regenerated lesson content; reload it immediately.
                                   setContentLoading(true)
                                   try {
@@ -797,6 +860,7 @@ export default function DashboardLessons() {
                                   )
                                   setResultModalOpen(true)
                                 } else if (resp.next_action === 'review_required_locked') {
+                                  setResultModalRemediation(false)
                                   setResultModalPassed(false)
                                   setResultModalMessage(
                                     followup?.explanation?.core_explanation
@@ -865,62 +929,119 @@ export default function DashboardLessons() {
             <h3 className="text-lg font-semibold text-[color:var(--text-primary)] mb-2">
               {resultModalPassed ? 'Assessment Passed' : 'Assessment Result'}
             </h3>
-            {assessmentResult && (
-              <p className="text-sm mb-2 text-[color:var(--text-primary)]">
-                Grade: {assessmentResult.correct_count}/{assessmentResult.total}
-              </p>
+
+            {resultModalRemediation ? (
+              <>
+                {assessmentResult && (
+                  <p className="text-sm mb-3 text-[color:var(--text-primary)]">
+                    Score: {assessmentResult.correct_count}/{assessmentResult.total} (
+                    {Math.round((assessmentResult.correct_count / assessmentResult.total) * 100)}%)
+                  </p>
+                )}
+                <div className="text-sm text-[color:var(--text-secondary)] space-y-3 mb-4">
+                  <p>
+                    You scored{' '}
+                    <span className="font-semibold text-[color:var(--text-primary)]">
+                      {assessmentResult
+                        ? Math.round((assessmentResult.correct_count / assessmentResult.total) * 100)
+                        : 0}
+                      %
+                    </span>{' '}
+                    and did not reach the passing score of{' '}
+                    <span className="font-semibold text-[color:var(--text-primary)]">
+                      {ASSESSMENT_PASSING_SCORE_PERCENT}%
+                    </span>
+                    .
+                  </p>
+                  <p>
+                    To help you master this topic, the lesson has been automatically divided into focused
+                    sub-lessons with more detailed explanations, examples, and guided learning.
+                  </p>
+                  <p>
+                    Complete and pass all generated sub-lessons before continuing to the next lesson.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeResultModal}
+                    className="rounded-xl px-3 py-2 text-sm border"
+                    style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={goToRemediationSubLessons}
+                    disabled={!remediationFirstSubLesson}
+                    className="rounded-xl px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    style={{ background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})` }}
+                  >
+                    Go To Sub-Lessons
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                {assessmentResult && (
+                  <p className="text-sm mb-2 text-[color:var(--text-primary)]">
+                    Grade: {assessmentResult.correct_count}/{assessmentResult.total}
+                  </p>
+                )}
+                <p className="text-sm whitespace-pre-wrap text-[color:var(--text-secondary)] mb-4">
+                  {resultModalMessage}
+                </p>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeResultModal}
+                    className="rounded-xl px-3 py-2 text-sm border"
+                    style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  >
+                    Close
+                  </button>
+
+                  {resultModalPassed ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (resultModalNextLesson) {
+                          selectLesson(resultModalNextLesson, {
+                            skipLockCheck: true,
+                            progressSnapshot: postPassProgressRef.current,
+                          })
+                          setCurrentTopic((resultModalNextLesson as any).topic || resultModalNextLesson.lesson_id)
+                          setAssessmentOpen(false)
+                        }
+                        void refreshProgress()
+                        closeResultModal()
+                      }}
+                      className="rounded-xl px-3 py-2 text-sm font-semibold text-white"
+                      style={{ background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})` }}
+                    >
+                      Go to next lesson
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAssessmentOpen(false)
+                        setAssessmentQuestions([])
+                        setAssessmentAnswers({})
+                        closeResultModal()
+                        lessonTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                      }}
+                      className="rounded-xl px-3 py-2 text-sm font-semibold text-white"
+                      style={{ background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})` }}
+                    >
+                      Continue
+                    </button>
+                  )}
+                </div>
+              </>
             )}
-            <p className="text-sm whitespace-pre-wrap text-[color:var(--text-secondary)] mb-4">
-              {resultModalMessage}
-            </p>
-
-            <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setResultModalOpen(false)}
-                className="rounded-xl px-3 py-2 text-sm border"
-                style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-              >
-                Close
-              </button>
-
-              {resultModalPassed ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (resultModalNextLesson) {
-                      selectLesson(resultModalNextLesson, {
-                        skipLockCheck: true,
-                        progressSnapshot: postPassProgressRef.current,
-                      })
-                      setCurrentTopic((resultModalNextLesson as any).topic || resultModalNextLesson.lesson_id)
-                      setAssessmentOpen(false)
-                    }
-                    void refreshProgress()
-                    setResultModalOpen(false)
-                  }}
-                  className="rounded-xl px-3 py-2 text-sm font-semibold text-white"
-                  style={{ background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})` }}
-                >
-                  Go to next lesson
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAssessmentOpen(false)
-                    setAssessmentQuestions([])
-                    setAssessmentAnswers({})
-                    setResultModalOpen(false)
-                    lessonTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                  }}
-                  className="rounded-xl px-3 py-2 text-sm font-semibold text-white"
-                  style={{ background: `linear-gradient(90deg, ${accentPrimary}, ${accentSecondary})` }}
-                >
-                  Continue
-                </button>
-              )}
-            </div>
           </div>
         </div>
       )}

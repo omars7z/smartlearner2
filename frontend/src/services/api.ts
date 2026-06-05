@@ -127,12 +127,11 @@ export interface AuthResponse {
 }
 
 export const authApi = {
-  async register(payload: { fullName: string; email: string; password: string; role: UserRole }) {
+  async register(payload: { fullName: string; email: string; password: string }) {
     const res = await api.post<AuthResponse>('/auth/register', {
       full_name: payload.fullName,
       email: payload.email,
       password: payload.password,
-      role: payload.role,
     })
     return res.data
   },

@@ -3,14 +3,13 @@ import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { GraduationCap, Mail, Lock, User, Eye, EyeOff } from 'lucide-react'
 import { useLanguage } from '../context/LanguageContext'
-import { authApi, type UserRole } from '../services/api'
+import { authApi } from '../services/api'
 import { onAuthSessionStarted } from '../utils/dashboardStorage'
 
 export default function Register() {
   const { t } = useLanguage()
   const navigate = useNavigate()
   const [showPassword, setShowPassword] = useState(false)
-  const [role, setRole] = useState<UserRole>('student')
   const [showToast, setShowToast] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState({
@@ -52,7 +51,6 @@ export default function Register() {
         fullName: form.fullName,
         email: form.email,
         password: form.password,
-        role,
       })
       localStorage.setItem('smartlearner_token', res.access_token)
       localStorage.setItem(
@@ -60,7 +58,7 @@ export default function Register() {
         JSON.stringify({
           fullName: res.full_name ?? form.fullName,
           email: res.email ?? form.email,
-          role: res.role ?? role,
+          role: res.role ?? 'student',
         })
       )
       onAuthSessionStarted()
@@ -181,41 +179,6 @@ export default function Register() {
                   className="w-full rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 py-3 ps-10 pe-4 text-slate-900 dark:text-white placeholder-slate-400 focus:border-[#3B82F6] focus:ring-2 focus:ring-[#3B82F6]/20 outline-none transition"
                   placeholder="••••••••"
                 />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
-                {t.register.role}
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => setRole('student')}
-                  className={`flex flex-col items-center gap-2 rounded-xl border-2 py-4 transition-all ${
-                    role === 'student'
-                      ? 'border-[#3B82F6] bg-[#3B82F6]/10'
-                      : 'border-slate-200 dark:border-slate-600 hover:border-slate-300'
-                  }`}
-                >
-                  <GraduationCap className="h-8 w-8" />
-                  <span className="font-medium text-slate-700 dark:text-slate-300">
-                    {t.register.student}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRole('admin')}
-                  className={`flex flex-col items-center gap-2 rounded-xl border-2 py-4 transition-all ${
-                    role === 'admin'
-                      ? 'border-[#3B82F6] bg-[#3B82F6]/10'
-                      : 'border-slate-200 dark:border-slate-600 hover:border-slate-300'
-                  }`}
-                >
-                  <User className="h-8 w-8" />
-                  <span className="font-medium text-slate-700 dark:text-slate-300">
-                    {t.register.admin}
-                  </span>
-                </button>
               </div>
             </div>
             <div className="flex items-start">

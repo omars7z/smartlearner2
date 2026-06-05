@@ -11,10 +11,11 @@ class TokenResponse(BaseModel):
 
 
 class RegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     full_name: str = Field(min_length=1, max_length=255)
     email: str
     password: str
-    role: Literal["student", "admin"] = "student"
 
 
 class LoginRequest(BaseModel):

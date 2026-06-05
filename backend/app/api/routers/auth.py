@@ -38,7 +38,7 @@ async def register(payload: RegisterRequest, db: Annotated[AsyncSession, Depends
         email=payload.email,
         hashed_password=get_password_hash(payload.password),
         full_name=payload.full_name.strip(),
-        role=payload.role,
+        role="student",
     )
     token = create_access_token(str(user.id))
     return TokenResponse(
