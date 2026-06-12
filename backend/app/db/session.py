@@ -1,4 +1,5 @@
 import ssl
+import logging
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.engine.url import make_url
@@ -12,6 +13,27 @@ settings = get_settings()
 _url = settings.database_url
 _parsed = make_url(_url)
 _is_postgres = _parsed.drivername.startswith("postgresql")
+
+# Diagnostic logger: helps debug SSL decisions during container startup
+logger = logging.getLogger(__name__)
+try:
+    host = (_parsed.host or "").lower() if _parsed.host else ""
+    is_local = host in ("localhost", "127.0.0.1", "::1", "")
+    explicit = settings.database_ssl
+    use_ssl_guess = explicit is True or (explicit is None and not is_local)
+    logger.info(
+        "DB connection: driver=%s host=%s port=%s is_postgres=%s use_ssl_guess=%s DATABASE_SSL=%s DATABASE_SSL_VERIFY=%s",
+        _parsed.drivername,
+        host,
+        _parsed.port,
+        _is_postgres,
+        use_ssl_guess,
+        settings.database_ssl,
+        settings.database_ssl_verify,
+    )
+except Exception:
+    # Avoid raising during import; logging is best-effort
+    logger.exception("Failed to compute DB SSL diagnostic info")
 
 
 def _connect_args() -> dict | None:
