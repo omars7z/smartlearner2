@@ -59,7 +59,8 @@ def _connect_args() -> dict | None:
 
 
 def _engine_kwargs() -> dict:
-    base: dict = {"future": True, "echo": False}
+    # Change "echo": False to "echo": True temporarily
+    base: dict = {"future": True, "echo": True} 
     if _is_postgres:
         base["pool_pre_ping"] = True
     ca = _connect_args()
