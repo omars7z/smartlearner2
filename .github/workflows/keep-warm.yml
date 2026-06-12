@@ -1,6 +1,6 @@
 name: Keep Warm
 
-# Ping the backend every 6 days to prevent Koyeb free tier auto-pause after 7 days
+# Ping the backend every 6 days to prevent Render free tier auto-pause after 7 days
 on:
   schedule:
     - cron: "0 0 */6 * *"  # Every 6 days at midnight UTC
