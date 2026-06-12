@@ -11,10 +11,13 @@ class Settings(BaseSettings):
     # One shared DB for all devices: use a hosted PostgreSQL, e.g. Neon or Supabase, then deploy backend
     # with this URL so /auth and /users use one place.
     database_url: str = Field(default="sqlite+aiosqlite:///./smartlearner.db", alias="DATABASE_URL")
+    
     # For PostgreSQL: true/false, or leave unset to use TLS for non-localhost hosts.
     database_ssl: bool | None = Field(default=None, alias="DATABASE_SSL")
+    
     # If you see SSLCertVerificationError with Supabase pooler on Windows, set to false (dev only).
     database_ssl_verify: bool = Field(default=True, alias="DATABASE_SSL_VERIFY")
+    
     # Comma-separated front-end origins (e.g. https://app.vercel.app) when the UI is not on localhost.
     cors_extra_origins: str = Field(default="", alias="CORS_EXTRA_ORIGINS")
 

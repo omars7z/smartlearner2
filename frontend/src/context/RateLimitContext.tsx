@@ -21,7 +21,7 @@ export function RateLimitProvider({ children }: { children: React.ReactNode }) {
       const res = await api.get<Record<string, unknown>>('/usage/rate-limits')
       applyGroqLimitsFromJson(res.data)
     } catch {
-      /* ignore */
+      /*ignore*/
     }
   }, [])
 
