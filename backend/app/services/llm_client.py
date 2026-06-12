@@ -29,7 +29,7 @@ _GEMINI_TRANSIENT_HTTP = frozenset({429, 502, 503, 504})
 def _load_optional_module(name: str):
     try:
         return import_module(name)
-    except Exception:  # pragma: no cover
+    except Exception:  # no cover
         return None
 
 
