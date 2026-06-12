@@ -1,10 +1,7 @@
 name: CD
 
-# Build and publish container images to GitHub Container Registry (GHCR).
-# Pull: docker pull ghcr.io/<owner>/<repo>/backend:latest
-#
-# Optional repo secrets for deployment (Railway, VPS, etc.):
-#   DEPLOY_WEBHOOK_URL — POST URL triggered after a successful push to main
+# Build backend → GHCR (Koyeb pulls from here)
+# Deploy frontend → Vercel
 
 on:
   push:
@@ -20,20 +17,9 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  build-and-push:
-    name: Build ${{ matrix.image }}
+  build-backend:
+    name: Build backend (GHCR)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: backend
-            context: backend
-            dockerfile: backend/Dockerfile
-          - image: frontend
-            context: frontend
-            dockerfile: frontend/Dockerfile
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,38 +38,36 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/backend
           tags: |
             type=ref,event=branch
             type=ref,event=tag
             type=sha,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
+      - name: Build and push backend
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
+          context: backend
+          file: backend/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy-hook:
-    name: Deploy webhook
+  deploy-frontend:
+    name: Deploy frontend to Vercel
     runs-on: ubuntu-latest
-    needs: build-and-push
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - name: Trigger deploy webhook
-        env:
-          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
-        run: |
-          if [ -z "$DEPLOY_WEBHOOK_URL" ]; then
-            echo "DEPLOY_WEBHOOK_URL not set; skipping deploy hook."
-            exit 0
-          fi
-          curl -fsS -X POST "$DEPLOY_WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d "{\"repository\":\"${{ github.repository }}\",\"sha\":\"${{ github.sha }}\",\"ref\":\"${{ github.ref }}\"}"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Vercel
+        uses: vercel/action@main
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: frontend

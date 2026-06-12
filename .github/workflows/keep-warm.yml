@@ -1,0 +1,18 @@
+name: Keep Warm
+
+# Ping the backend every 6 days to prevent Koyeb free tier auto-pause after 7 days
+on:
+  schedule:
+    - cron: "0 0 */6 * *"  # Every 6 days at midnight UTC
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Ping backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health
+        continue-on-error: true
+        run: |
+          echo "Pinging backend to keep it warm..."
+          curl -f https://smartlearner-api.koyeb.app/health || echo "Backend not ready yet or URL needs update"
