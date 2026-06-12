@@ -409,12 +409,45 @@ _SYLLABUS_RUBRIC_CONCEPT_COUNTS_BY_LEVEL: dict[str, dict[str, int]] = {
     },
 }
 
+# Placement MCQ concepts → AI342 syllabus topic strings (see DEEP_LEARNING_SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL).
+_DEEP_LEARNING_PLACEMENT_TO_SYLLABUS_TOPIC_BY_LEVEL: dict[str, dict[str, str]] = {
+    "beginner": {
+        "Introduction to machine and deep learning": "What is Machine Learning",
+        "Supervised learning and data splits": "Training Validation and Test Sets",
+        "Logistic regression intuition": "Logistic Regression Model",
+        "Gradient descent and learning rate": "Gradient Descent Steps",
+        "Loss functions for classification": "Binary Cross-Entropy Loss",
+    },
+    "intermediate": {
+        "Feed-forward network layers": "Perceptron and MLP Layers",
+        "Activation functions": "Activation Functions",
+        "Forward propagation and shapes": "Forward Pass and Tensor Shapes",
+        "Backpropagation intuition": "Backpropagation Overview",
+        "Training an MLP": "Training Loop Structure",
+    },
+    "advanced": {
+        "Convolutional neural networks": "Convolution Operation",
+        "Convolution pooling and feature maps": "Pooling and Feature Maps",
+        "RNN and sequence modeling": "RNN Unrolling",
+        "LSTM and GRU gates": "LSTM Cell",
+        "Sequence task applications": "Sequence Modeling Tasks",
+    },
+    "very_advanced": {
+        "Classification evaluation metrics": "Accuracy and Error Rate",
+        "Precision recall and F1": "Precision Recall and F1",
+        "Confusion matrix interpretation": "Confusion Matrix",
+        "Regression metrics (MSE MAE)": "MSE and MAE",
+        "Choosing metrics for a task": "Choosing the Right Metric",
+    },
+}
+
 _DEEP_LEARNING_SYLLABUS_RUBRIC_CONCEPT_COUNTS_BY_LEVEL: dict[str, dict[str, int]] = {
     "beginner": {
         "Introduction to machine and deep learning": 2,
         "Supervised learning and data splits": 2,
         "Logistic regression intuition": 2,
         "Gradient descent and learning rate": 2,
+        "Loss functions for classification": 1,
     },
     "intermediate": {
         "Feed-forward network layers": 2,
@@ -573,6 +606,53 @@ def validate_question_concepts_for_level(questions: list[dict], level: str, trac
             )
 
 
+def normalize_syllabus_topic(topic: str, level: str, track: str = "python") -> str:
+    """
+    Map placement/rubric concept strings to canonical syllabus topic labels.
+    LLMs sometimes copy placement concepts into the topic field; this aligns them with AI342/PY4E allowlists.
+    """
+    raw = (topic or "").strip()
+    if not raw:
+        return raw
+    norm = normalize_level(level)
+    tr = normalize_track(track)
+    if tr in {"deep_learning", "dl"}:
+        allowed = DEEP_LEARNING_SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL.get(norm, frozenset())
+        mapping = _DEEP_LEARNING_PLACEMENT_TO_SYLLABUS_TOPIC_BY_LEVEL.get(norm, {})
+    else:
+        allowed = SYLLABUS_TOPIC_ALLOWLIST_BY_LEVEL.get(norm, frozenset())
+        mapping = {}
+    if raw in allowed:
+        return raw
+    mapped = mapping.get(raw)
+    if mapped:
+        return mapped
+    low = raw.lower()
+    for candidate in allowed:
+        if candidate.lower() == low:
+            return candidate
+    for placement_label, syllabus_label in mapping.items():
+        if placement_label.lower() == low:
+            return syllabus_label
+    return raw
+
+
+def map_placement_concepts_for_syllabus(
+    concepts: list[str] | None,
+    level: str,
+    track: str = "python",
+) -> list[str]:
+    """Turn placement weak/strong concept labels into syllabus topic strings for prompts."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in concepts or []:
+        mapped = normalize_syllabus_topic(str(item).strip(), level, track=track)
+        if mapped and mapped not in seen:
+            out.append(mapped)
+            seen.add(mapped)
+    return out
+
+
 def validate_syllabus_topics_for_level(lessons: list[dict], level: str, track: str = "python") -> None:
     """Ensure each lesson topic appears in the allowlist for the placement level."""
     norm = normalize_level(level)
@@ -583,7 +663,9 @@ def validate_syllabus_topics_for_level(lessons: list[dict], level: str, track: s
     if not allowed:
         return
     for i, lesson in enumerate(lessons):
-        topic = str(lesson.get("topic") or "").strip()
+        topic = normalize_syllabus_topic(str(lesson.get("topic") or "").strip(), norm, track=track)
+        if topic:
+            lesson["topic"] = topic
         if topic and topic not in allowed:
             raise ValueError(
                 f"Lesson {i + 1}: topic {topic!r} is not in the syllabus rubric for level {norm!r}."

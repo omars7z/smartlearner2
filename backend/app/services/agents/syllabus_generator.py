@@ -1,4 +1,8 @@
-from app.core.placement_rubric import chapter_scope_for_level, normalize_level
+from app.core.placement_rubric import (
+    chapter_scope_for_level,
+    map_placement_concepts_for_syllabus,
+    normalize_level,
+)
 from app.services.agents.base import AgentPair, AgentValidationError
 from app.services.agents.syllabus_common import (
     chapter_structure_hint,
@@ -40,8 +44,8 @@ class SyllabusGeneratorAgent(AgentPair):
         if not rag_context:
             raise AgentValidationError("No RAG context available for syllabus generation.")
 
-        weak = [str(t).strip() for t in (weak_topics or []) if str(t).strip()]
-        strong = [str(t).strip() for t in (strong_topics or []) if str(t).strip()]
+        weak = map_placement_concepts_for_syllabus(weak_topics, lvl, track=track_key)
+        strong = map_placement_concepts_for_syllabus(strong_topics, lvl, track=track_key)
 
         personalization_block = ""
         if weak:
@@ -85,6 +89,7 @@ class SyllabusGeneratorAgent(AgentPair):
                 + "\n\n"
                 + "Each sub-lesson MUST have: "
                 + "\"topic\" — copied EXACTLY from the allowed topic list (no changes, no paraphrasing); "
+                + "NEVER use a rubric_concept or placement-test concept string as topic; "
                 + "\"lesson_title\" — specific and engaging, NOT just the topic name "
                 + "(e.g. 'Storing and Naming Values' not 'Variables'); "
                 # + "Do NOT prefix lesson_title with the word \"Practical\" (no titles like \"Practical X\"). "

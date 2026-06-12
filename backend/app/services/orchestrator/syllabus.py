@@ -1,6 +1,10 @@
 import re
 
-from app.core.placement_rubric import normalize_level, normalize_track
+from app.core.placement_rubric import (
+    map_placement_concepts_for_syllabus,
+    normalize_level,
+    normalize_track,
+)
 from app.services.agents.syllabus_common import (
     lesson_title_from_topic,
     syllabus_allowed_topics_ordered,
@@ -48,7 +52,9 @@ def build_local_syllabus_payload(
     topics = syllabus_allowed_topics_ordered(lvl, track=norm_track)
     concepts = syllabus_rubric_concepts_for_level(lvl, track=norm_track)
     concept_by_topic = {topics[i]: concepts[i] for i in range(min(len(topics), len(concepts)))}
-    concept_priority = _prioritized_concepts(concepts, weak_topics=weak_topics, strong_topics=strong_topics)
+    weak_mapped = map_placement_concepts_for_syllabus(weak_topics, lvl, track=norm_track)
+    strong_mapped = map_placement_concepts_for_syllabus(strong_topics, lvl, track=norm_track)
+    concept_priority = _prioritized_concepts(concepts, weak_topics=weak_mapped, strong_topics=strong_mapped)
 
     if normalize_track(norm_track) in {"deep_learning", "dl"}:
         from app.core.deep_learning_curriculum import DL_CHAPTERS_BY_LEVEL, DL_CHAPTER_TITLES
