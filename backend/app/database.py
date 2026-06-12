@@ -1,17 +1,19 @@
 import ssl
-from sqlalchemy.ext.asyncio import create_async_engine
 import os
+from sqlalchemy.ext.asyncio import create_async_engine
 
-# 1. Create the permissive SSL context
+# Grab your URL
+database_url = os.getenv("DATABASE_URL")
+
+# Create the permissive SSL context
 ssl_ctx = ssl.create_default_context()
 ssl_ctx.check_hostname = False
 ssl_ctx.verify_mode = ssl.CERT_NONE
 
-# 2. Grab your URL
-database_url = os.getenv("DATABASE_URL")
+print("🚀 TRACER BULLET: Custom SSL Context is loading!") # <--- Add this!
 
-# 3. Inject the context into the engine
+# Inject it into your code router's database engine
 engine = create_async_engine(
     database_url,
-    connect_args={"ssl": ssl_ctx}  # This is the magic line that bypasses the crash
+    connect_args={"ssl": ssl_ctx} 
 )
