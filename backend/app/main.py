@@ -71,9 +71,10 @@ async def _ensure_users_table_columns_postgres(conn) -> None:
     ]
     for stmt in stmts:
         try:
-            await conn.execute(text(stmt))
-        except Exception:
-            pass
+            async with conn.begin_nested():
+                await conn.execute(text(stmt))
+        except Exception as exc:
+            print(f"Warning: postgres migration statement failed, continuing: {stmt} => {exc}")
 
 
 async def _ensure_lessons_table_columns_postgres(conn) -> None:
@@ -87,9 +88,19 @@ async def _ensure_lessons_table_columns_postgres(conn) -> None:
     ]
     for stmt in stmts:
         try:
-            await conn.execute(text(stmt))
-        except Exception:
-            pass
+            async with conn.begin_nested():
+                await conn.execute(text(stmt))
+        except Exception as exc:
+            print(f"Warning: postgres migration statement failed, continuing: {stmt} => {exc}")
+
+
+async def _ensure_pgvector_extension(conn) -> None:
+    """Enable pgvector extension on Supabase/Postgres if it is not already installed."""
+    try:
+        async with conn.begin_nested():
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    except Exception as exc:
+        print(f"Warning: pgvector extension check failed: {exc}")
 
 
 @asynccontextmanager
@@ -100,6 +111,7 @@ async def lifespan(_: FastAPI):
             await _ensure_users_table_columns(conn)
             await _ensure_lessons_table_columns(conn)
         elif "postgres" in settings.database_url.lower():
+            await _ensure_pgvector_extension(conn)
             await _ensure_users_table_columns_postgres(conn)
             await _ensure_lessons_table_columns_postgres(conn)
         await conn.run_sync(Base.metadata.create_all)
