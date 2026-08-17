@@ -42,7 +42,10 @@ _PY_WRONG = (
     "It can only be used after learning advanced networking topics.",
     "It is unrelated to expressions, conditions, or loops.",
     "It replaces the need to test or debug your code.",
-    "It is a syntax rule that applies only to class inheritance.",
+    # NOTE: keep this pool free of forbidden-term substrings
+    # (placement_rubric.FORBIDDEN_TERMS_BY_LEVEL) so fallback content passes
+    # the same scope rules the placement validator enforces on generations.
+    "It is a rule that only matters when printing long reports.",
     "It is not used in beginner-level Python at all.",
 )
 

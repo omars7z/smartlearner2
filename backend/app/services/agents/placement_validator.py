@@ -1,4 +1,5 @@
 import json
+import re
 
 from app.core.placement_rubric import (
     chapter_scope_for_level,
@@ -60,21 +61,29 @@ def _validate_placement_deterministic(data: dict, level: str, question_count: in
             raise AgentValidationError(f"Question {i + 1}: correct_answer must be one of choices.")
 
         forbidden = forbidden_terms_for_level(lvl, track=track)
+        # Scan the stem AND all choices (fallback distractors previously slipped
+        # through a stem-only scan). Strip type() output representations first:
+        # "<class 'int'>" is legitimate beginner content, not OOP material, and
+        # must not collide with the "class " scope rule.
+        scan_text = re.sub(
+            r"<class '[^']*'>", "", " ".join([text_lower] + [c.lower() for c in norm_choices])
+        )
         for term in forbidden:
-            if term in text_lower:
+            if term in scan_text:
                 raise AgentValidationError(
                     f"Question {i + 1}: level {lvl!r} must not reference '{term}'. "
                     f"Allowed scope: {chapter_scope_for_level(lvl, track=track)}."
                 )
 
-        normalized.append(
-            {
-                "question": text,
-                "choices": norm_choices,
-                "correct_answer": correct_str,
-                "concept": str(q.get("concept") or "").strip(),
-            }
-        )
+        row = {
+            "question": text,
+            "choices": norm_choices,
+            "correct_answer": correct_str,
+            "concept": str(q.get("concept") or "").strip(),
+        }
+        if q.get("served_by"):  # preserve generation provenance if present
+            row["served_by"] = q["served_by"]
+        normalized.append(row)
 
     expected = list(concepts_for_level(lvl, track=track))
     for i, row in enumerate(normalized):
@@ -88,7 +97,10 @@ def _validate_placement_deterministic(data: dict, level: str, question_count: in
     except ValueError as exc:
         raise AgentValidationError(str(exc)) from exc
 
-    return {"questions": normalized}
+    out = {"questions": normalized}
+    if data.get("served_by"):  # preserve payload-level provenance if present
+        out["served_by"] = data["served_by"]
+    return out
 
 
 class PlacementValidatorAgent(AgentPair):
@@ -119,6 +131,21 @@ class PlacementValidatorAgent(AgentPair):
             if not isinstance(out, dict) or not out.get("valid"):
                 raise AgentValidationError(str(out.get("error") or "PlacementValidatorAgent rejected input"))
             merged = {"questions": out.get("questions") or []}
-            return _validate_placement_deterministic(merged, level, question_count, track=track)
+            result = _validate_placement_deterministic(merged, level, question_count, track=track)
         except AgentValidationError:
-            return _validate_placement_deterministic(data, level, question_count, track=track)
+            result = _validate_placement_deterministic(data, level, question_count, track=track)
+        return self._reattach_provenance(result, data)
+
+    @staticmethod
+    def _reattach_provenance(result: dict, original: dict) -> dict:
+        """The LLM validator echo drops non-schema keys; restore generation
+        provenance (served_by) from the original payload — the source of truth."""
+        orig_qs = original.get("questions") or []
+        for i, row in enumerate(result.get("questions") or []):
+            if "served_by" not in row and i < len(orig_qs) and isinstance(orig_qs[i], dict):
+                sb = orig_qs[i].get("served_by")
+                if sb:
+                    row["served_by"] = sb
+        if "served_by" not in result and original.get("served_by"):
+            result["served_by"] = original["served_by"]
+        return result

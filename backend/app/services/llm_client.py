@@ -111,6 +111,10 @@ class LLMClient:
         global _LOGGED_GROQ_UNAVAILABLE_PRIMARY, _LOGGED_GROQ_UNAVAILABLE_VALIDATOR, _LOGGED_GEMINI_UNAVAILABLE
         self.settings = get_settings()
         self.use_validator_key = use_validator_key
+        # Provenance of the most recent generate_json call: "groq:<model>",
+        # "gemini:<model>", or "static_template". Callers attach this to
+        # generated payloads so fallback substitutions are visible in agent_runs.
+        self.last_served_by: str | None = None
         self.gemini_api_key = (getattr(self.settings, "gemini_api_key", None) or "").strip()
         self.client = None
         if groq_mod:
@@ -217,6 +221,7 @@ class LLMClient:
                     text = self._text_from_gemini_rest_json(data)
                     if model_id != _GEMINI_REST_MODEL_FALLBACKS[0]:
                         logger.warning("LLM: Gemini REST succeeded using fallback model %s.", model_id)
+                    self.last_served_by = f"gemini:{model_id}"
                     return text
                 except requests.RequestException as exc:
                     r = getattr(exc, "response", None)
@@ -250,6 +255,7 @@ class LLMClient:
                 combined = f"{system_prompt}\n\n{user_prompt}"
                 response = self.gemini_client.generate_content(combined)
                 text = response.text or "{}"
+                self.last_served_by = "gemini:gemini-2.0-flash"
             else:
                 text = self._generate_with_gemini_rest(system_prompt, user_prompt)
             logger.warning("LLM: Gemini fallback succeeded (route=%s).", _prompt_route(system_prompt))
@@ -277,6 +283,7 @@ class LLMClient:
                 {"role": "user", "content": user},
             ],
         )
+        self.last_served_by = f"groq:{model}:relaxed"
         return completion.choices[0].message.content or "{}"
 
     def generate_json(self, model: str, system_prompt: str, user_prompt: str) -> str:
@@ -332,6 +339,7 @@ class LLMClient:
                         {"role": "user", "content": user_prompt},
                     ],
                 )
+            self.last_served_by = f"groq:{model}"
             return completion.choices[0].message.content or "{}"
         except LLMClientError:
             raise
@@ -354,6 +362,7 @@ class LLMClient:
                         "LLM: Groq json_validate_failed but failed_generation parsed; using it (route=%s).",
                         route,
                     )
+                    self.last_served_by = f"groq:{model}:salvaged"
                     return salvage
                 logger.warning(
                     "LLM: Groq strict JSON validation failed for %s; retrying once with relaxed JSON mode.",
@@ -404,6 +413,7 @@ class LLMClient:
             return self._mock_json(system_prompt, user_prompt, self.use_validator_key)
 
     def _mock_json(self, system_prompt: str, user_prompt: str, use_validator_key: bool = False) -> str:
+        self.last_served_by = "static_template"
         sp = system_prompt.lower()
         if "placement" in sp and "validator" not in sp:
             # Keep placement flow usable in local/dev even if Groq is unavailable.
@@ -460,7 +470,10 @@ class LLMClient:
                     "It is unrelated to expressions, conditions, or loops.",
                     "It is only useful after learning advanced networking topics.",
                     "It replaces the need to test or debug your code.",
-                    "It is a syntax rule that applies only to class inheritance.",
+                    # NOTE: keep this pool free of forbidden-term substrings
+                    # (placement_rubric.FORBIDDEN_TERMS_BY_LEVEL) so fallback
+                    # content passes the same scope rules as generated content.
+                    "It is a rule that only matters when printing long reports.",
                     "It is not used in beginner-level Python at all.",
                 ]
             question = random.choice(stems)

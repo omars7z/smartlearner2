@@ -390,6 +390,11 @@ class PlacementGeneratorAgent(AgentPair):
                         "choices": norm_choices,
                         "correct_answer": correct_resolved,
                         "concept": rubric_concept,
+                        # Provenance: which provider/model actually served this
+                        # slot (groq:<model> | gemini:<model> | static_template).
+                        # Rides into the agent_runs generate-stage log so silent
+                        # fallback substitution is measurable (fallback rate).
+                        "served_by": self.llm.last_served_by,
                     }
                 )
                 break
@@ -398,4 +403,7 @@ class PlacementGeneratorAgent(AgentPair):
                     f"Placement generator could not produce a well-formed MCQ for slot {idx + 1}."
                 )
 
-        return {"questions": questions}
+        return {
+            "questions": questions,
+            "served_by": [q.get("served_by") for q in questions],
+        }
